@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "blend-project-knowledge",
+  "displayName": "Blend Project Knowledge",
+  "version": "0.2.0",
+  "description": "Search Blend project evidence and create source-cited project dossiers.",
+  "author": {
+    "name": "Blend360"
+  },
+  "homepage": "https://essencesentry.shop/",
+  "keywords": [
+    "blend360",
+    "project-knowledge",
+    "dossier",
+    "sales-brief",
+    "mcp"
+  ],
+  "mcpServers": "./.mcp.json"
+}

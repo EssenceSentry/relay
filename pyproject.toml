@@ -1,0 +1,61 @@
+[project]
+name = "relay"
+version = "0.2.0"
+description = "An agent-native project knowledge system that retrieves grounded evidence, identifies missing knowledge, asks the right expert, and turns their reply into reusable organizational memory"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "aws-cdk-lib>=2.261.0,<3",
+    "constructs>=10.5,<11",
+]
+
+[dependency-groups]
+dev = [
+    "aws-lambda-typing>=2,<3",
+    "boto3>=1.43,<2",
+    "boto3-stubs[full]>=1.43,<2",
+    "fastapi>=0.128,<1",
+    "httpx>=0.28,<1",
+    "mcp[cli]>=1.28.1,<2",
+    "openai>=2.15,<3",
+    "pydantic>=2.12,<3",
+    "pyright>=1.1,<2",
+    "PyJWT[crypto]>=2.10,<3",
+    "pypdf>=5.9,<7",
+    "python-docx>=1.2,<2",
+    "python-pptx>=1.0,<2",
+    "pytest>=9,<10",
+    "requests>=2.32,<3",
+    "ruff>=0.12,<1",
+    "unword>=0.2.2,<0.3",
+    "uvicorn>=0.35,<1",
+    "types-requests>=2.32,<3",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["services/api", "src", "."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 80
+target-version = "py312"
+extend-exclude = ["cdk.out", "data", "output"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["app.py", "src", "services", "infrastructure", "scripts", "test_support", "tests"]
+exclude = ["cdk.out", "data", "output"]
+extraPaths = ["src", "services/api"]
+stubPath = "typings"
+venvPath = "."
+venv = ".venv"

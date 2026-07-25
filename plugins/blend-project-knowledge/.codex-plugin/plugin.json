@@ -1,0 +1,35 @@
+{
+  "name": "blend-project-knowledge",
+  "version": "0.2.0",
+  "description": "Search Blend project evidence and create source-cited project dossiers.",
+  "author": {
+    "name": "Blend360"
+  },
+  "homepage": "https://essencesentry.shop/",
+  "keywords": [
+    "blend360",
+    "project-knowledge",
+    "dossier",
+    "sales-brief",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Blend Project Knowledge",
+    "shortDescription": "Search project evidence and create cited dossiers.",
+    "longDescription": "Connects Codex to Blend Project Knowledge and adds a guided, evidence-first workflow for creating project dossiers, sales briefs, case studies, and success stories with inline source citations.",
+    "developerName": "Blend360",
+    "category": "Productivity",
+    "capabilities": [
+      "Search",
+      "Write"
+    ],
+    "websiteURL": "https://essencesentry.shop/",
+    "defaultPrompt": [
+      "Create a source-cited dossier for a project.",
+      "Turn this project into a one-page sales brief.",
+      "Find evidence for a Blend360 success story."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

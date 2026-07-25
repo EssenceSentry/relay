@@ -1,0 +1,11 @@
+{
+  "app": "uv run python app.py",
+  "context": {
+    "region": "us-east-1",
+    "retain_data": false,
+    "embedding_dimensions": 1536,
+    "embedding_model": "text-embedding-3-large",
+    "document_processing_model": "gpt-5.4-mini",
+    "review_model": "gpt-5-mini"
+  }
+}

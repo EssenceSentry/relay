@@ -1,0 +1,13 @@
+interface:
+  display_name: "Create Project Dossier"
+  short_description: "Create evidence-backed project dossiers and sales briefs"
+  default_prompt: "Use $create-project-dossier to create a source-cited project dossier from Blend Project Knowledge."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "blend-project-knowledge"
+      description: "Search and read evidence from Blend Project Knowledge."
+      transport: "streamable_http"
+      url: "https://essencesentry.shop/mcp/"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,9 @@
+awslambdaric>=3,<4
+boto3>=1.43,<2
+openai>=2.15,<3
+pydantic>=2.12,<3
+pypdf>=5.9,<7
+python-docx>=1.2,<2
+python-pptx>=1.0,<2
+requests>=2.32,<3
+unword>=0.2.2,<0.3

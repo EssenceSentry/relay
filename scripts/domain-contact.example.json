@@ -1,0 +1,14 @@
+{
+  "Contact": {
+    "FirstName": "Your first name",
+    "LastName": "Your last name",
+    "ContactType": "PERSON",
+    "AddressLine1": "Your street address",
+    "City": "Your city",
+    "State": "Your state or department",
+    "CountryCode": "UY",
+    "ZipCode": "Your postal code",
+    "PhoneNumber": "+598.00000000",
+    "Email": "you@example.com"
+  }
+}

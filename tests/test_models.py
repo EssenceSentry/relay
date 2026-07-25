@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from knowledge_core.models import (
+    KnowledgeGapCreate,
+    SearchResponse,
+    UploadRequest,
+)
+
+
+def test_knowledge_gap_normalizes_email() -> None:
+    gap = KnowledgeGapCreate(
+        question="Who was the delivery lead?",
+        assigned_expert_email="  Expert@Example.COM ",
+    )
+
+    assert gap.assigned_expert_email == "expert@example.com"
+
+
+def test_knowledge_gap_rejects_unknown_priority() -> None:
+    with pytest.raises(ValidationError):
+        KnowledgeGapCreate(
+            question="Who was the delivery lead?",
+            assigned_expert_email="expert@example.com",
+            priority="urgent",  # type: ignore[arg-type]
+        )
+
+
+def test_search_response_explains_scores() -> None:
+    response = SearchResponse(project_id="prj_1", query="test", hits=[])
+
+    assert "not calibrated probabilities" in response.score_note
+
+
+def test_upload_request_allows_authenticated_limit() -> None:
+    request = UploadRequest(
+        filename="large-deck.pptx",
+        content_type="application/octet-stream",
+        size_bytes=100 * 1024 * 1024,
+    )
+
+    assert request.size_bytes == 100 * 1024 * 1024
+
+
+def test_upload_request_rejects_files_above_authenticated_limit() -> None:
+    with pytest.raises(ValidationError):
+        UploadRequest(
+            filename="too-large-deck.pptx",
+            content_type="application/octet-stream",
+            size_bytes=100 * 1024 * 1024 + 1,
+        )
