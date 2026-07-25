@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "blend360-project-knowledge",
+  "owner": {
+    "name": "Blend360"
+  },
+  "description": "Blend360 project knowledge tools and evidence-backed dossier workflows.",
+  "plugins": [
+    {
+      "name": "blend-project-knowledge",
+      "source": "./plugins/blend-project-knowledge",
+      "description": "Search Blend project evidence and create source-cited project dossiers.",
+      "version": "0.2.0"
+    }
+  ]
+}

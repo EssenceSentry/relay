@@ -216,3 +216,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Data
+initial-ingestion-report.json
+domain-contact.json
+scripts/domain-contact.json
+PIH - Dataset/
+downloaded_markdown/
+text_extraction/
+data/
+
+# CDK
+cdk-outputs.json
+cdk.out/
+
+# Playwright
+.playwright-cli/
+
+# Playwright test output
+output/
+
+# macOS
+.DS_Store

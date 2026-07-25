@@ -1,0 +1,16 @@
+.venv
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+cdk.out
+cdk-outputs.json
+tests
+README.md
+Makefile
+.env
+domain-contact.json
+scripts/domain-contact.json
+downloaded_markdown

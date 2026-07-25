@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Blend Project Knowledge</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2216%22 fill=%22%2318272f%22/><path d=%22M18 18h16c9 0 14 5 14 12 0 4-2 7-5 9 5 2 7 6 7 11 0 9-6 14-17 14H18V18zm13 18c5 0 7-2 7-6s-2-6-7-6h-3v12h3zm2 21c5 0 8-2 8-7s-3-7-8-7h-5v14h5z%22 fill=%22white%22/></svg>" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="background-stage" aria-hidden="true">
+      <div class="ambient ambient-one"></div>
+      <div class="ambient ambient-two"></div>
+      <img
+        class="background-illustration art-loading"
+        src="assets/knowledge-orbit.png"
+        alt=""
+      />
+      <img
+        class="background-illustration art-login"
+        src="assets/knowledge-portal.png"
+        alt=""
+      />
+      <img
+        class="background-illustration art-app"
+        src="assets/document-agent.png"
+        alt=""
+      />
+      <img
+        class="background-illustration art-expert"
+        src="assets/knowledge-hub.png"
+        alt=""
+      />
+    </div>
+
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Blend Project Knowledge home">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span>
+          </span>
+          <span>
+            <strong>Project Knowledge</strong>
+            <small>Upload, verify, retrieve</small>
+          </span>
+        </a>
+        <div class="topbar-actions">
+          <button class="button button-glass button-small open-plugin" type="button">
+            Get the agent plugin
+          </button>
+          <div id="user-area" class="user-area hidden">
+            <span id="user-email" class="user-email"></span>
+            <button id="logout-button" class="button button-quiet button-small" type="button">
+              Sign out
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section id="loading-view" class="center-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <h1>Preparing your workspace</h1>
+        <p>Loading deployment configuration and checking your session.</p>
+      </section>
+
+      <section id="expert-view" class="expert-landing hidden">
+        <article class="expert-card panel">
+          <div class="expert-intro">
+            <p class="eyebrow">Project knowledge request</p>
+            <span id="expert-priority" class="expert-priority">Normal priority</span>
+          </div>
+
+          <div id="expert-question-content">
+            <p id="expert-project" class="expert-project"></p>
+            <h1>Share the detail the project record is missing.</h1>
+            <p class="expert-lead">
+              Your answer will be reviewed for completeness, then added as reusable
+              project knowledge when it is sufficient.
+            </p>
+
+            <div class="expert-question-card">
+              <span>Question</span>
+              <p id="expert-question-text"></p>
+            </div>
+
+            <div id="expert-context-wrap" class="expert-support-card hidden">
+              <h2>Why this is being asked</h2>
+              <p id="expert-context"></p>
+            </div>
+
+            <div id="expert-review-wrap" class="expert-review-card hidden">
+              <h2>What would complete your answer</h2>
+              <p id="expert-review"></p>
+            </div>
+
+            <form id="expert-answer-form" class="expert-answer-form">
+              <label for="expert-answer">Your answer</label>
+              <textarea
+                id="expert-answer"
+                required
+                minlength="3"
+                maxlength="20000"
+                rows="9"
+                placeholder="Give a direct, reusable answer with the concrete detail the project team needs."
+              ></textarea>
+              <div class="expert-actions">
+                <p>
+                  You can also reply directly to the email that brought you here.
+                </p>
+                <button id="expert-submit" class="button button-primary" type="submit">
+                  Submit for review
+                </button>
+              </div>
+            </form>
+
+            <div id="expert-success" class="expert-result expert-success hidden" role="status">
+              <span aria-hidden="true">✓</span>
+              <div>
+                <h2>Thank you — your answer is on its way.</h2>
+                <p>
+                  It is being reviewed now. If one small detail is still missing,
+                  you may receive a short follow-up.
+                </p>
+                <a class="button button-quiet" href="/">Open the knowledge workspace</a>
+              </div>
+            </div>
+
+            <div id="expert-resolved" class="expert-result expert-resolved hidden">
+              <span aria-hidden="true">✓</span>
+              <div>
+                <h2>This question has already been resolved.</h2>
+                <p>No further response is needed. Thank you for helping complete the project record.</p>
+                <a class="button button-quiet" href="/">Open the knowledge workspace</a>
+              </div>
+            </div>
+          </div>
+
+          <div id="expert-error" class="expert-result expert-error hidden" role="alert">
+            <span aria-hidden="true">!</span>
+            <div>
+              <h1>We could not open this answer link.</h1>
+              <p id="expert-error-message">
+                The link may be incomplete or no longer available.
+              </p>
+              <p>Try opening the original email again, or simply reply to it with your answer.</p>
+              <a class="button button-quiet" href="/">Open the knowledge workspace</a>
+            </div>
+          </div>
+        </article>
+        <p class="expert-privacy">
+          This private link is specific to one project question. Please do not forward it.
+        </p>
+      </section>
+
+      <section id="login-view" class="hero hidden">
+        <div class="hero-copy">
+          <p class="eyebrow">A very small interface, on purpose</p>
+          <h1>Feed the project knowledge base. Let the agent do the rest.</h1>
+          <p class="hero-text">
+            Upload project material, follow ingestion status, and get answers the
+            agent can back with evidence—not guesses.
+          </p>
+          <div class="hero-actions">
+            <button id="login-button" class="button button-primary button-large" type="button">
+              Sign in with Cognito
+            </button>
+            <button class="button button-glass button-large open-plugin" type="button">
+              Download agent plugin
+            </button>
+          </div>
+          <div class="hero-proof">
+            <span><i></i> Hybrid retrieval</span>
+            <span><i></i> Source-cited answers</span>
+            <span><i></i> Expert feedback loop</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-label="Project knowledge network">
+          <img src="assets/knowledge-portal.png" alt="" />
+          <div class="connect-card">
+            <p class="eyebrow">Connect an agent</p>
+            <strong>Use one URL—or install the complete workflow</strong>
+            <div class="connection-url">
+              <input
+                id="mcp-url"
+                aria-label="Remote MCP URL"
+                readonly
+                value="Loading deployment URL…"
+              />
+              <button
+                id="copy-mcp-url"
+                class="button button-quiet button-small"
+                type="button"
+              >
+                Copy
+              </button>
+            </div>
+            <small id="mcp-connect-help">
+              Add this as a remote MCP server, then select Connect to sign in
+              through Cognito.
+            </small>
+            <button class="connect-plugin-link open-plugin" type="button">
+              Get MCP + dossier skill for Codex or Claude
+              <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="app-view" class="app-grid hidden">
+        <section class="global-search-panel panel" aria-label="Search project knowledge">
+          <div class="global-search-copy">
+            <p class="eyebrow">Across the workspace</p>
+            <strong>Find knowledge in every project</strong>
+          </div>
+          <form id="global-search-form" class="global-search-form" role="search">
+            <label class="sr-only" for="global-search-input">Search all projects</label>
+            <input
+              id="global-search-input"
+              type="search"
+              required
+              minlength="2"
+              maxlength="4000"
+              autocomplete="off"
+              placeholder="Search outcomes, technologies, industries, people…"
+            />
+            <button id="global-search-submit" class="button button-primary" type="submit">
+              Search all projects
+            </button>
+          </form>
+        </section>
+
+        <aside id="workspace-sidebar" class="sidebar panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2>Projects</h2>
+            </div>
+            <button id="show-project-form" class="icon-button" type="button" aria-label="Create project">+</button>
+          </div>
+
+          <form id="project-form" class="stack compact hidden">
+            <label>
+              Project name
+              <input id="project-name" required maxlength="200" placeholder="e.g. Snowflake modernization" />
+            </label>
+            <label>
+              Description <span class="muted">optional</span>
+              <textarea id="project-description" rows="3" maxlength="2000"></textarea>
+            </label>
+            <div class="button-row">
+              <button class="button button-primary button-small" type="submit">Create</button>
+              <button id="cancel-project" class="button button-quiet button-small" type="button">Cancel</button>
+            </div>
+          </form>
+
+          <div id="project-list" class="project-list" aria-live="polite"></div>
+          <div class="sidebar-footer">
+            <span class="status-dot"></span>
+            <span>Agent API and MCP share the same backend.</span>
+          </div>
+        </aside>
+
+        <section id="workspace-main" class="main-column">
+          <div class="workspace-header panel">
+            <div>
+              <p class="eyebrow">Selected project</p>
+              <h1 id="selected-project-name">Choose a project</h1>
+              <p id="selected-project-description" class="muted"></p>
+            </div>
+            <div class="segmented" role="tablist" aria-label="Workspace sections">
+              <button class="segment active" data-tab="documents" type="button">Documents</button>
+              <button class="segment" data-tab="questions" type="button">
+                Assigned questions
+                <span id="question-count" class="count-badge">0</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="documents-tab" class="tab-panel">
+            <section class="upload-panel panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Direct to S3</p>
+                  <h2>Upload source material</h2>
+                </div>
+                <span id="upload-format-note" class="limit-note">PDF · PPTX · DOC · DOCX · TXT · MD · CSV · JSON</span>
+              </div>
+              <p id="upload-access-note" class="muted">
+                Upload access follows the deployment authentication mode.
+              </p>
+              <label id="drop-zone" class="drop-zone" for="file-input">
+                <input id="file-input" type="file" hidden accept=".pdf,.pptx,.doc,.docx,.txt,.md,.csv,.json" />
+                <span class="upload-icon" aria-hidden="true">↑</span>
+                <strong>Drop a document here</strong>
+                <span id="upload-limit-note">or click to choose a file</span>
+              </label>
+              <div id="upload-progress" class="progress-wrap hidden">
+                <div class="progress-meta">
+                  <span id="upload-filename"></span>
+                  <span id="upload-percent">0%</span>
+                </div>
+                <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Ingestion</p>
+                  <h2>Project documents</h2>
+                </div>
+                <button id="refresh-documents" class="button button-quiet button-small" type="button">Refresh</button>
+              </div>
+              <div id="document-list" class="document-list empty-state">
+                Select a project to view its documents.
+              </div>
+            </section>
+          </div>
+
+          <div id="questions-tab" class="tab-panel hidden">
+            <section class="question-layout panel">
+              <div class="question-list-column">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Human resolution</p>
+                    <h2>Your open questions</h2>
+                  </div>
+                  <button id="refresh-questions" class="button button-quiet button-small" type="button">Refresh</button>
+                </div>
+                <div id="question-list" class="question-list empty-state">
+                  No assigned questions.
+                </div>
+              </div>
+
+              <div id="answer-pane" class="answer-pane empty-answer">
+                <div>
+                  <span class="answer-glyph">?</span>
+                  <h3>Select a question</h3>
+                  <p>The server will review your answer and index it when it is sufficient.</p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="search-results-page" class="search-page panel hidden">
+          <div class="search-page-header">
+            <button id="close-search-results" class="button button-quiet button-small" type="button">
+              ← Back to project
+            </button>
+            <div>
+              <p class="eyebrow">Workspace results</p>
+              <h1 id="search-results-title">Search every project</h1>
+              <p id="search-results-summary" class="muted">
+                Enter a query above to search the same hybrid knowledge index used by the agent.
+              </p>
+            </div>
+          </div>
+          <div id="search-results-list" class="search-results-list empty-state" aria-live="polite">
+            Search results will appear here.
+          </div>
+        </section>
+      </section>
+
+      <div
+        id="plugin-modal"
+        class="modal-backdrop hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plugin-modal-title"
+      >
+        <section class="plugin-modal panel">
+          <button
+            id="close-plugin-modal"
+            class="modal-close"
+            type="button"
+            aria-label="Close plugin instructions"
+          >
+            ×
+          </button>
+
+          <div class="plugin-modal-hero">
+            <div>
+              <p class="eyebrow">MCP + guided workflow</p>
+              <h2 id="plugin-modal-title">Give your agent the evidence and the method.</h2>
+              <p>
+                One bundle connects to Project Knowledge and adds the
+                source-cited dossier skill. It works with Codex and Claude Code.
+              </p>
+              <div class="plugin-badges" aria-label="Plugin contents">
+                <span>Remote MCP</span>
+                <span>Dossier skill</span>
+                <span>Inline citations</span>
+              </div>
+            </div>
+            <img src="assets/knowledge-hub.png" alt="" />
+          </div>
+
+          <div class="download-step">
+            <span class="step-number">1</span>
+            <div>
+              <strong>Download and extract the bundle</strong>
+              <p>
+                The archive includes the plugin, skill, MCP configuration, and
+                marketplace files for both clients.
+              </p>
+            </div>
+            <a
+              id="download-plugin"
+              class="button button-primary"
+              href="downloads/blend-project-knowledge-bundle.zip"
+              download
+            >
+              Download plugin
+            </a>
+          </div>
+
+          <div class="client-grid">
+            <article class="client-card">
+              <div class="client-heading">
+                <span class="client-mark">C</span>
+                <div>
+                  <p class="eyebrow">Codex</p>
+                  <h3>Install from the extracted folder</h3>
+                </div>
+              </div>
+              <pre id="codex-install-command"><code>codex plugin marketplace add ~/Downloads/blend-project-knowledge-bundle
+codex plugin add blend-project-knowledge@blend360-project-knowledge</code></pre>
+              <button
+                class="button button-quiet button-small copy-install-command"
+                data-copy-target="codex-install-command"
+                type="button"
+              >
+                Copy Codex commands
+              </button>
+              <small>Start a new thread, then use <code>$create-project-dossier</code>.</small>
+            </article>
+
+            <article class="client-card">
+              <div class="client-heading">
+                <span class="client-mark client-mark-claude">A</span>
+                <div>
+                  <p class="eyebrow">Claude Code</p>
+                  <h3>Install from the extracted folder</h3>
+                </div>
+              </div>
+              <pre id="claude-install-command"><code>claude plugin marketplace add ~/Downloads/blend-project-knowledge-bundle
+claude plugin install blend-project-knowledge@blend360-project-knowledge</code></pre>
+              <button
+                class="button button-quiet button-small copy-install-command"
+                data-copy-target="claude-install-command"
+                type="button"
+              >
+                Copy Claude commands
+              </button>
+              <small>Run <code>/reload-plugins</code>, then use <code>/blend-project-knowledge:create-project-dossier</code>.</small>
+            </article>
+          </div>
+
+          <div class="mcp-only-note">
+            <div>
+              <strong>Only need the tools?</strong>
+              <span>Copy the MCP URL instead. The plugin is what adds the dossier-writing method.</span>
+            </div>
+            <button id="copy-mcp-url-modal" class="button button-glass button-small" type="button">
+              Copy MCP URL
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "blend-project-knowledge": {
+      "type": "http",
+      "url": "https://essencesentry.shop/mcp/"
+    }
+  }
+}
