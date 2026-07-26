@@ -5,6 +5,7 @@ from functools import cached_property
 import boto3
 
 from app.mcp_oauth_store import McpOAuthStore
+from knowledge_core.dossier_rendering import LocalDossierRenderer
 from knowledge_core.dynamo import KnowledgeRepository
 from knowledge_core.email_service import SesEmailService
 from knowledge_core.notifications import (
@@ -66,6 +67,10 @@ class ServiceContainer:
     @cached_property
     def retrieval(self) -> RetrievalService:
         return RetrievalService(openai=self.openai, search=self.search)
+
+    @cached_property
+    def dossier_renderer(self) -> LocalDossierRenderer:
+        return LocalDossierRenderer()
 
     @cached_property
     def email_sender(self) -> SesEmailService | None:

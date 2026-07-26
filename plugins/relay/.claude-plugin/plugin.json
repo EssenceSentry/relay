@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "blend-project-knowledge",
-  "displayName": "Blend Project Knowledge",
-  "version": "1.0.0",
-  "description": "Manage Blend project knowledge and create source-cited dossiers.",
+  "name": "relay",
+  "displayName": "Relay",
+  "version": "1.0.1",
+  "description": "Search and manage Relay project knowledge with cited dossiers.",
   "author": {
     "name": "Blend360"
   },

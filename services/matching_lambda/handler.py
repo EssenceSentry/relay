@@ -176,9 +176,7 @@ def _verified_matches(
             result.decision == NameMatchDecision.MATCH
             and result.confidence >= _SETTINGS.matching_threshold
         ):
-            matches.append(
-                (profile, result.confidence, result.rationale)
-            )
+            matches.append((profile, result.confidence, result.rationale))
     return matches
 
 

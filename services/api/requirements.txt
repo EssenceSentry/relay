@@ -4,5 +4,6 @@ mcp>=1.28.1,<2
 openai>=2.15,<3
 pydantic>=2.12,<3
 PyJWT[crypto]>=2.10,<3
+python-docx>=1.2,<2
 requests>=2.32,<3
 uvicorn>=0.35,<1

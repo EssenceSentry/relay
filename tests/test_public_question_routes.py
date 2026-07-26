@@ -17,4 +17,6 @@ def test_public_browser_answer_routes_are_removed() -> None:
     client = make_test_client(app)
 
     assert client.get("/api/public/question").status_code == 404
-    assert client.post("/api/public/question/answers", json={}).status_code == 404
+    assert (
+        client.post("/api/public/question/answers", json={}).status_code == 404
+    )

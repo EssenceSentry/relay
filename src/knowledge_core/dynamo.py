@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from knowledge_core.identity import (
     candidate_surname,
-    is_blend_email,
+    normalize_blend_email,
     normalize_email,
     normalize_name_tokens,
 )
@@ -168,13 +168,17 @@ class KnowledgeRepository:
             },
             ConditionExpression="attribute_not_exists(PK)",
         )
-        if is_blend_email(created_by):
+        try:
+            normalized_creator = normalize_email(created_by)
+        except ValueError:
+            normalized_creator = None
+        if normalized_creator is not None:
             self.ensure_project_membership(
                 project_id=project_id,
-                email=created_by,
+                email=normalized_creator,
                 role=MembershipRole.AUTHOR,
                 source=MembershipSource.PROJECT_AUTHOR,
-                created_by=created_by,
+                created_by=normalized_creator,
             )
         return item
 
@@ -333,9 +337,7 @@ class KnowledgeRepository:
         self._table.put_item(Item=item)
         memberships = self._table.query(
             IndexName="GSI1",
-            KeyConditionExpression=Key("GSI1PK").eq(
-                f"USER#{normalized_email}"
-            ),
+            KeyConditionExpression=Key("GSI1PK").eq(f"USER#{normalized_email}"),
         )
         for membership in memberships.get("Items", []):
             if membership.get("entity_type") != "PROJECT_MEMBERSHIP":
@@ -446,9 +448,7 @@ class KnowledgeRepository:
                             "TableName": self._table.name,
                             "Key": suppression_key,
                             "ConditionExpression": "#reason = :declined",
-                            "ExpressionAttributeNames": {
-                                "#reason": "reason"
-                            },
+                            "ExpressionAttributeNames": {"#reason": "reason"},
                             "ExpressionAttributeValues": _serialized_item(
                                 {":declined": "INVITATION_DECLINED"}
                             ),
@@ -512,12 +512,14 @@ class KnowledgeRepository:
         project_id: str,
         email: str,
     ) -> dict[str, Any] | None:
-        if not is_blend_email(email):
+        try:
+            normalized_email = normalize_email(email)
+        except ValueError:
             return None
         response = self._table.get_item(
             Key={
                 "PK": _project_pk(project_id),
-                "SK": _membership_sk(email),
+                "SK": _membership_sk(normalized_email),
             },
             ConsistentRead=True,
         )
@@ -536,8 +538,7 @@ class KnowledgeRepository:
             email=normalized,
         )
         return bool(
-            membership
-            and membership.get("entity_type") == "PROJECT_MEMBERSHIP"
+            membership and membership.get("entity_type") == "PROJECT_MEMBERSHIP"
         )
 
     def list_project_members(
@@ -557,23 +558,24 @@ class KnowledgeRepository:
         ]
         project = self.get_project(project_id)
         created_by = (
-            str(project.get("created_by") or "")
-            if project is not None
-            else ""
+            str(project.get("created_by") or "") if project is not None else ""
         )
-        if is_blend_email(created_by) and all(
-            member.get("email") != created_by.casefold()
-            for member in members
+        try:
+            normalized_creator = normalize_email(created_by)
+        except ValueError:
+            normalized_creator = None
+        if normalized_creator is not None and all(
+            member.get("email") != normalized_creator for member in members
         ):
             assert project is not None
             members.append(
                 {
                     "entity_type": "PROJECT_MEMBERSHIP",
                     "project_id": project_id,
-                    "email": created_by.casefold(),
+                    "email": normalized_creator,
                     "role": MembershipRole.AUTHOR.value,
                     "source": MembershipSource.PROJECT_AUTHOR.value,
-                    "created_by": created_by.casefold(),
+                    "created_by": normalized_creator,
                     "created_at": project.get("created_at"),
                     "updated_at": project.get("updated_at"),
                 }
@@ -805,9 +807,7 @@ class KnowledgeRepository:
         if invitation is None:
             raise KeyError(f"Invitation {invitation_id!r} does not exist")
         target_status = (
-            InvitationStatus.ACCEPTED
-            if accepted
-            else InvitationStatus.DECLINED
+            InvitationStatus.ACCEPTED if accepted else InvitationStatus.DECLINED
         )
         current_status = str(invitation.get("status"))
         if current_status == target_status.value:
@@ -935,9 +935,7 @@ class KnowledgeRepository:
                     }
                 }
             )
-        self._table.meta.client.transact_write_items(
-            TransactItems=transaction
-        )
+        self._table.meta.client.transact_write_items(TransactItems=transaction)
         decided = self.get_collaboration_invitation(
             email=normalized_email,
             invitation_id=invitation_id,
@@ -1291,9 +1289,7 @@ class KnowledgeRepository:
             if exclusive_start_key is not None:
                 kwargs["ExclusiveStartKey"] = exclusive_start_key
             response = self._table.scan(**kwargs)
-            evidence.extend(
-                _plain(item) for item in response.get("Items", [])
-            )
+            evidence.extend(_plain(item) for item in response.get("Items", []))
             raw_last_key = response.get("LastEvaluatedKey")
             if not isinstance(raw_last_key, dict) or not raw_last_key:
                 break
@@ -1324,9 +1320,7 @@ class KnowledgeRepository:
             "PK": _project_pk(project_id),
             "SK": f"MATCH#{evaluation_id}",
             "GSI1PK": f"USER#{email}",
-            "GSI1SK": (
-                f"MATCH#{project_id}#{evidence_id}#{evaluation_id}"
-            ),
+            "GSI1SK": (f"MATCH#{project_id}#{evidence_id}#{evaluation_id}"),
             "entity_type": "NAME_MATCH_EVALUATION",
             "evaluation_id": evaluation_id,
             "project_id": project_id,
@@ -1360,7 +1354,7 @@ class KnowledgeRepository:
         blend360_emails: list[str],
         extraction_version: str,
     ) -> None:
-        normalized = {normalize_email(email) for email in blend360_emails}
+        normalized = {normalize_blend_email(email) for email in blend360_emails}
         assignments = [
             "contributor_extraction_version = :version",
             "contributor_extracted_at = :now",
@@ -1648,7 +1642,9 @@ class KnowledgeRepository:
         status = QuestionStatus.OPEN.value
         email = gap.assigned_expert_email
         reply_token = (
-            secrets.token_hex(24) if reply_domain and email is not None else None
+            secrets.token_hex(24)
+            if reply_domain and email is not None
+            else None
         )
         reply_address = (
             f"kg-{reply_token}@{reply_domain.strip().casefold().rstrip('.')}"
@@ -2164,8 +2160,7 @@ class KnowledgeRepository:
                 existing = existing_response.get("Item")
                 if (
                     existing is not None
-                    and existing.get("review_status")
-                    == target_status.value
+                    and existing.get("review_status") == target_status.value
                 ):
                     return _plain(existing)
                 raise ValueError(

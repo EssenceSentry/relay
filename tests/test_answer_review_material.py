@@ -36,7 +36,9 @@ class FakeSearch:
         return [] if text is None else [{"text": text}]
 
 
-def test_review_material_uses_ready_documents_and_bounds_supporting_text() -> None:
+def test_review_material_uses_ready_documents_and_bounds_supporting_text() -> (
+    None
+):
     material, usable = build_answer_review_material(
         answer_history="Expert answer: [supporting documents only]",
         answers=[

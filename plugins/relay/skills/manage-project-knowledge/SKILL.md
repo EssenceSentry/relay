@@ -1,13 +1,14 @@
 ---
 name: manage-project-knowledge
-description: Manage authenticated Blend Project Knowledge projects through the remote MCP. Use when a user wants to create, inspect, rename, archive, or restore projects; manage collaborators or invitations; upload or download source documents; search project evidence; review notifications; create or answer project questions; review an external answer; or record a verified fact. Also use when deciding which MCP operation safely completes a project-knowledge task.
+description: Manage authenticated Relay projects through the remote MCP. Use when a user wants to create, inspect, rename, archive, or restore projects; manage collaborators or invitations; upload or download source documents; search project evidence; review notifications; create or answer project questions; review an external answer; resolve a verified user by name; or record a verified fact. Also use when deciding which Relay MCP operation safely completes a project-knowledge task.
 ---
 
 # Manage Project Knowledge
 
 Use the authenticated MCP as the sole application interface. Begin with
-`get_current_user` when identity or permissions matter. Resolve unknown project
-IDs with `list_projects`; never guess an ID.
+`get_current_user` when identity or permissions matter. Treat
+`search_all_projects` as the primary way to locate project knowledge and
+answers. Never guess an ID.
 
 ## Safety contract
 
@@ -41,15 +42,28 @@ different project or identity.
 
 ## Search and documents
 
-Use `search_all_projects` to discover the relevant project. Use several focused
-`search_project_knowledge` queries for evidence. Results are previews: open
-material sources with `get_document_text` before making claims. Cite the
-document name and page, slide, or locator where available. Retrieval scores
-rank evidence; they do not prove a claim.
+For questions and evidence research, use this retrieval order:
 
-Use `list_project_documents` to inspect inventory and status, `get_document`
-for one status or failure, and `get_document_download_url` for a time-limited
-original or Markdown download.
+1. Run several focused `search_all_projects` queries. Use the returned project
+   and document IDs to route the rest of the research.
+2. Open the strongest material hits with `get_document_text`. Search results
+   are previews and are not sufficient evidence by themselves.
+3. Use `search_project_knowledge` only to deepen or disambiguate research after
+   global search identifies a likely project.
+4. Use `list_projects`, `list_project_documents`, and broad document reading
+   only as a last-resort discovery path after focused global and project
+   searches fail to locate the answer.
+
+Do not answer a knowledge question by listing projects, selecting one,
+enumerating all its documents, and reading them all unless retrieval has
+already failed. `list_projects` remains appropriate when the user explicitly
+asks for a project list or an administrative write needs project selection.
+`list_project_documents` is primarily for inventory and ingestion status.
+Use `get_document` for one document's status or failure and
+`get_document_download_url` for a time-limited original or Markdown download.
+
+Cite the document name and page, slide, or locator where available. Retrieval
+scores rank evidence; they do not prove a claim.
 
 ## Uploads
 
@@ -69,9 +83,19 @@ original or Markdown download.
 - Use `list_my_assigned_questions` for the current user's work queue.
 - Inspect `get_project_question` and `list_question_answers` before answering
   or reviewing.
+- Every authenticated reader may call `create_project_question`, including a
+  user whose project role is `READER` and whose `can_edit` capability is false.
+  `can_edit` governs project content changes, not questions.
+- When the user names an answerer but does not provide an exact email, call
+  `search_user_directory` with the person's name. Use a unique result's exact
+  verified email; if several people match, ask the user which person they mean.
+  Never construct an email from a name.
 - Call `create_project_question` only after confirming the email-producing
-  action. An optional assigned address must be an exact verified Blend address;
-  never infer one from a name.
+  action. An optional assigned address must come from the verified directory or
+  be an exact address the user supplied.
+- Every authenticated reader may submit an answer. Answers from
+  non-collaborators wait for member review; lack of edit access is not a reason
+  to refuse the submission.
 - Call `submit_question_answer` with text, up to ten same-project `READY`
   document IDs, or both. Use `prepare_document_upload` first for new evidence
   and wait for `READY`.

@@ -32,11 +32,15 @@ class CognitoVerifier:
         region: str,
         user_pool_id: str,
         client_id: str,
+        allowed_email_domains: frozenset[str],
     ) -> None:
+        if not allowed_email_domains:
+            raise ValueError("At least one login email domain is required")
         self._issuer = (
             f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
         )
         self._client_id = client_id
+        self._allowed_email_domains = allowed_email_domains
         self._jwk_client = PyJWKClient(f"{self._issuer}/.well-known/jwks.json")
 
     def verify(self, token: str) -> Principal:
@@ -82,8 +86,22 @@ class CognitoVerifier:
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only verified @blend360.com accounts may sign in",
+                detail="The authenticated email address is invalid",
             ) from exc
+        email_domain = email.rsplit("@", maxsplit=1)[1]
+        if email_domain not in self._allowed_email_domains:
+            allowed = ", ".join(
+                f"@{domain}" for domain in sorted(self._allowed_email_domains)
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Sign-in requires a verified email from: {allowed}",
+            )
+
+        # TEMPORARY HACKATHON DEMO HACK:
+        # The deployed demo adds gmail.com because Blend360 quarantines the
+        # Cognito verification email. Production must remove that deployment
+        # flag and use the planned Blend Microsoft SSO identity provider.
         raw_groups: object = claims.get("cognito:groups") or []
         groups: frozenset[str]
         try:
@@ -105,6 +123,8 @@ class CognitoVerifier:
 
 _bearer = HTTPBearer(auto_error=False)
 _STRING_LIST_ADAPTER = TypeAdapter(list[str])
+
+
 def make_principal_dependency(
     container: ServiceContainer,
 ):
@@ -118,6 +138,7 @@ def make_principal_dependency(
         region=container.settings.aws_region,
         user_pool_id=container.settings.user_pool_id,
         client_id=container.settings.user_pool_client_id,
+        allowed_email_domains=(container.settings.allowed_login_email_domains),
     )
 
     def current_principal(
@@ -140,13 +161,11 @@ def make_principal_dependency(
             )
         identity_source = (
             "MICROSOFT_SSO"
-            if str(
-                principal.claims.get("cognito:username") or ""
-            ).startswith("Microsoft_")
-            or bool(principal.claims.get("identities"))
-            else str(
-                (existing or {}).get("identity_source") or "COGNITO"
+            if str(principal.claims.get("cognito:username") or "").startswith(
+                "Microsoft_"
             )
+            or bool(principal.claims.get("identities"))
+            else str((existing or {}).get("identity_source") or "COGNITO")
         )
         if existing is None or any(
             (

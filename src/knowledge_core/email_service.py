@@ -285,7 +285,7 @@ class SesEmailService:
                 f'font-size:16px">{escape(message)}</p>'
                 f"{action_html}"
                 '<div style="margin-top:26px;padding-top:20px;'
-                'border-top:1px solid #e2e8e6;color:#718087;'
+                "border-top:1px solid #e2e8e6;color:#718087;"
                 'font-size:13px;line-height:1.55">'
                 "This message was generated from Relay project activity."
                 "</div>"
@@ -360,7 +360,7 @@ def _html_shell(*, title: str, preheader: str, body: str) -> str:
         "font-family:Georgia,serif;font-size:21px;font-weight:700;"
         'line-height:34px;text-align:center;vertical-align:middle">B</span>'
         '<span style="font-size:15px;font-weight:700;vertical-align:middle">'
-        "Blend360 Project Knowledge</span></div>"
+        "Relay</span></div>"
         '<div style="padding:34px 32px;background:#fff;border-radius:0 0 18px 18px;'
         'box-shadow:0 12px 36px rgba(23,36,43,.10)">'
         f'<h1 style="font-size:28px;line-height:1.22;margin:0 0 22px;'
@@ -368,7 +368,7 @@ def _html_shell(*, title: str, preheader: str, body: str) -> str:
         "</div>"
         '<div style="padding:18px 24px;color:#718087;font-size:12px;'
         'line-height:1.55;text-align:center">'
-        "Sent by Blend360 Project Knowledge. Reply to the original question "
+        "Sent by Relay. Reply to the original question "
         "email or answer through your connected agent.</div>"
         "</div></body></html>"
     )

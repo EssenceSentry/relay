@@ -1,16 +1,16 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
-  "name": "blend360-project-knowledge",
+  "name": "relay",
   "owner": {
     "name": "Blend360"
   },
-  "description": "Blend360 project knowledge tools and evidence-backed dossier workflows.",
+  "description": "Relay project knowledge tools and evidence-backed dossier workflows.",
   "plugins": [
     {
-      "name": "blend-project-knowledge",
-      "source": "./plugins/blend-project-knowledge",
-      "description": "Manage Blend project knowledge and create source-cited project dossiers.",
-      "version": "1.0.0"
+      "name": "relay",
+      "source": "./plugins/relay",
+      "description": "Search and manage Relay project knowledge with cited dossiers.",
+      "version": "1.0.1"
     }
   ]
 }

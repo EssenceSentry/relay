@@ -7,7 +7,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.application import (
@@ -20,6 +20,7 @@ from knowledge_core.ids import stable_action_id
 from knowledge_core.models import (
     AnswerSubmit,
     CollaboratorInviteCreate,
+    DossierRenderRequest,
     HumanAnswerReviewRequest,
     InvitationDecisionRequest,
     KnowledgeGapCreate,
@@ -58,6 +59,19 @@ class PresignedUploadResponse(BaseModel):
     max_upload_bytes: int
     supported_extensions: list[str]
     upload_required: bool
+
+
+class DossierRenderResponse(BaseModel):
+    project_id: str
+    render_id: str
+    title: str
+    source_sha256: str
+    docx_url: str
+    pdf_url: str
+    docx_filename: str
+    pdf_filename: str
+    expires_in_seconds: int
+    reused_existing_render: bool
 
 
 class WebSearchHitResponse(BaseModel):
@@ -121,6 +135,20 @@ def build_api_router(
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
         return _api_call(lambda: application.get_current_user(principal))
+
+    @router.get("/users/directory")
+    def search_user_directory(
+        query: Annotated[str, Query(min_length=2, max_length=200)],
+        limit: Annotated[int, Query(ge=1, le=10)] = 8,
+        principal: Principal = principal_default,
+    ) -> list[dict[str, Any]]:
+        return _api_call(
+            lambda: application.search_user_directory(
+                query,
+                principal=principal,
+                limit=limit,
+            )
+        )
 
     @router.get("/projects")
     def list_projects(
@@ -367,6 +395,42 @@ def build_api_router(
             content_type=download.content_type,
             download_format=download.download_format,
             expires_in_seconds=download.expires_in_seconds,
+        )
+
+    @router.post(
+        "/projects/{project_id}/dossiers/render",
+        response_model=DossierRenderResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def render_project_dossier(
+        project_id: str,
+        body: DossierRenderRequest,
+        idempotency_key: IdempotencyKey = None,
+        principal: Principal = principal_default,
+    ) -> DossierRenderResponse:
+        request_id = _required_request_id(
+            body_request_id=body.request_id,
+            idempotency_key=idempotency_key,
+        )
+        rendered = _api_call(
+            lambda: application.render_project_dossier(
+                project_id,
+                body,
+                principal=principal,
+                request_id=request_id,
+            )
+        )
+        return DossierRenderResponse(
+            project_id=rendered.project_id,
+            render_id=rendered.render_id,
+            title=rendered.title,
+            source_sha256=rendered.source_sha256,
+            docx_url=rendered.docx_url,
+            pdf_url=rendered.pdf_url,
+            docx_filename=rendered.docx_filename,
+            pdf_filename=rendered.pdf_filename,
+            expires_in_seconds=rendered.expires_in_seconds,
+            reused_existing_render=rendered.reused_existing_render,
         )
 
     @router.post(

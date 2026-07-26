@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from knowledge_core.identity import extract_blend_emails, normalize_email
+from knowledge_core.identity import (
+    extract_blend_emails,
+    normalize_blend_email,
+)
 from knowledge_core.models import (
     ContributorCandidate,
     DocumentEnhancementResult,
@@ -101,15 +104,12 @@ class CollaborationDiscovery:
         exact_emails = set(source_emails)
         for reported_email in result.blend360_emails:
             try:
-                normalized = normalize_email(reported_email)
+                normalized = normalize_blend_email(reported_email)
             except ValueError:
                 continue
             conflicts_with_visible_address = any(
                 source_email != normalized
-                and (
-                    source_email in normalized
-                    or normalized in source_email
-                )
+                and (source_email in normalized or normalized in source_email)
                 for source_email in source_emails
             )
             if not conflicts_with_visible_address:
@@ -124,15 +124,13 @@ class CollaborationDiscovery:
                 "locator": locator,
                 "extraction_version": CONTRIBUTOR_EXTRACTION_VERSION,
             }
-            membership, _created = (
-                self._repository.ensure_project_membership(
-                    project_id=project_id,
-                    email=email,
-                    role=MembershipRole.COLLABORATOR,
-                    source=MembershipSource.DOCUMENT_EXACT_EMAIL,
-                    created_by="document-ingestion",
-                    evidence=evidence,
-                )
+            membership, _created = self._repository.ensure_project_membership(
+                project_id=project_id,
+                email=email,
+                role=MembershipRole.COLLABORATOR,
+                source=MembershipSource.DOCUMENT_EXACT_EMAIL,
+                created_by="document-ingestion",
+                evidence=evidence,
             )
             if (
                 membership.get("entity_type") == "PROJECT_MEMBERSHIP"

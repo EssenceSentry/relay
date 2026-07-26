@@ -114,7 +114,9 @@ def test_prepare_upload_is_idempotent_and_returns_browser_fallback() -> None:
         principal=_principal(),
         request_id="upload-request-001",
     )
-    repository.documents[str(first.document["document_id"])]["status"] = "QUEUED"
+    repository.documents[str(first.document["document_id"])]["status"] = (
+        "QUEUED"
+    )
     retry = application.prepare_document_upload(
         "prj_1",
         _request(),

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlencode
+
+from botocore.exceptions import ClientError
 
 from app.auth import Principal
 from app.document_downloads import (
@@ -15,11 +18,22 @@ from knowledge_core.document_formats import (
     SUPPORTED_DOCUMENT_SUFFIXES,
     document_suffix,
 )
+from knowledge_core.dossier_rendering import (
+    DossierCompilationError,
+    DossierValidationError,
+    parse_dossier_markdown,
+)
+from knowledge_core.identity import (
+    email_name_tokens,
+    normalize_email,
+    normalize_name_tokens,
+)
 from knowledge_core.ids import safe_filename, stable_action_id
 from knowledge_core.models import (
     AnswerSubmit,
     CollaboratorInviteCreate,
     DocumentStatus,
+    DossierRenderRequest,
     HumanAnswerReviewRequest,
     InvitationDecisionRequest,
     KnowledgeGapCreate,
@@ -70,6 +84,20 @@ class UploadSession:
     upload_required: bool
 
 
+@dataclass(frozen=True, slots=True)
+class DossierRenderSession:
+    project_id: str
+    render_id: str
+    title: str
+    source_sha256: str
+    docx_url: str
+    pdf_url: str
+    docx_filename: str
+    pdf_filename: str
+    expires_in_seconds: int
+    reused_existing_render: bool
+
+
 class KnowledgeApplication:
     """Shared authenticated operations used by both HTTP and MCP adapters."""
 
@@ -97,9 +125,7 @@ class KnowledgeApplication:
             project.get("status", ProjectStatus.ACTIVE.value)
             == ProjectStatus.ARCHIVED.value
         )
-        if archived and not (
-            allow_archived_for_admin and principal.is_admin
-        ):
+        if archived and not (allow_archived_for_admin and principal.is_admin):
             raise NotFound("Project not found")
         return project
 
@@ -138,6 +164,77 @@ class KnowledgeApplication:
                 principal.email
             ),
         }
+
+    def search_user_directory(
+        self,
+        query: str,
+        *,
+        principal: Principal,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Resolve a person's name or exact email to verified user profiles."""
+        self.require_authenticated(principal)
+        if not 1 <= limit <= 10:
+            raise InvalidOperation(
+                "Directory result limit must be from 1 to 10"
+            )
+        query_tokens = normalize_name_tokens(query)
+        try:
+            query_email = normalize_email(query)
+        except ValueError:
+            query_email = None
+        if query_email is None and not query_tokens:
+            raise InvalidOperation(
+                "Directory search requires a person's name or exact email"
+            )
+
+        matches: list[tuple[int, str, str, dict[str, Any]]] = []
+        for profile in self.container.repository.list_user_profiles():
+            if profile.get("email_verified") is not True:
+                continue
+            email = normalize_email(str(profile.get("email") or ""))
+            display_name = str(profile.get("display_name") or email).strip()
+            display_tokens = normalize_name_tokens(display_name)
+            combined_tokens = set(display_tokens) | set(
+                email_name_tokens(email)
+            )
+            score: int
+            match_type: str
+            if query_email == email:
+                score = 400
+                match_type = "EXACT_EMAIL"
+            elif query_tokens == display_tokens:
+                score = 300
+                match_type = "EXACT_NAME"
+            elif query_tokens and all(
+                token in display_tokens for token in query_tokens
+            ):
+                score = 200 + len(query_tokens)
+                match_type = "NAME_TOKENS"
+            elif query_tokens and all(
+                token in combined_tokens for token in query_tokens
+            ):
+                score = 100 + len(query_tokens)
+                match_type = "NAME_OR_EMAIL_TOKENS"
+            else:
+                continue
+            matches.append(
+                (
+                    score,
+                    display_name.casefold(),
+                    email,
+                    {
+                        "display_name": display_name,
+                        "email": email,
+                        "identity_source": str(
+                            profile.get("identity_source") or "COGNITO"
+                        ),
+                        "match_type": match_type,
+                    },
+                )
+            )
+        matches.sort(key=lambda match: (-match[0], match[1], match[2]))
+        return [match[3] for match in matches[:limit]]
 
     def list_projects(
         self,
@@ -432,6 +529,136 @@ class KnowledgeApplication:
         except DocumentDownloadUnavailable as exc:
             raise Conflict(str(exc)) from exc
 
+    def render_project_dossier(
+        self,
+        project_id: str,
+        body: DossierRenderRequest,
+        *,
+        principal: Principal,
+        request_id: str,
+    ) -> DossierRenderSession:
+        """Render agent-authored Markdown and persist private deliverables."""
+
+        self.require_project(project_id, principal=principal)
+        try:
+            content = parse_dossier_markdown(body.markdown)
+        except DossierValidationError as exc:
+            raise InvalidOperation(str(exc)) from exc
+
+        render_id = stable_action_id(
+            prefix="dsr",
+            project_id=project_id,
+            request_id=f"{principal.email}:{request_id}",
+        )
+        prefix = f"dossiers/{project_id}/{render_id}"
+        marker_key = f"{prefix}/source.md"
+        source_sha256 = hashlib.sha256(
+            body.markdown.encode("utf-8")
+        ).hexdigest()
+        existing_hash = self._dossier_marker_hash(marker_key)
+        if existing_hash is not None and existing_hash != source_sha256:
+            raise Conflict(
+                "The dossier request ID is already bound to different Markdown"
+            )
+
+        requested_stem = body.filename_stem or content.title
+        filename_stem = (
+            safe_filename(requested_stem).removesuffix(".md")[:96]
+            or "project-dossier"
+        )
+        if existing_hash is None:
+            try:
+                rendered = self.container.dossier_renderer.render(
+                    body.markdown,
+                    filename_stem=filename_stem,
+                )
+            except DossierValidationError as exc:
+                raise InvalidOperation(str(exc)) from exc
+            except DossierCompilationError as exc:
+                raise ApplicationError(
+                    "The dossier PDF could not be rendered"
+                ) from exc
+            metadata = {
+                "project-id": project_id,
+                "render-id": render_id,
+                "source-sha256": source_sha256,
+                "created-by": principal.email,
+            }
+            for key, data, content_type, extension in (
+                (
+                    f"{prefix}/dossier.docx",
+                    rendered.docx,
+                    (
+                        "application/vnd.openxmlformats-officedocument."
+                        "wordprocessingml.document"
+                    ),
+                    "docx",
+                ),
+                (
+                    f"{prefix}/dossier.pdf",
+                    rendered.pdf,
+                    "application/pdf",
+                    "pdf",
+                ),
+                (
+                    f"{prefix}/source.tex",
+                    rendered.latex,
+                    "application/x-tex",
+                    "tex",
+                ),
+            ):
+                self.container.s3.put_object(
+                    Bucket=self.container.settings.document_bucket,
+                    Key=key,
+                    Body=data,
+                    ContentType=content_type,
+                    ContentDisposition=(
+                        f'attachment; filename="{filename_stem}.{extension}"'
+                    ),
+                    Metadata=metadata,
+                )
+            # Write the source marker last. Its presence means both requested
+            # deliverables and the reproducible TeX source were persisted.
+            self.container.s3.put_object(
+                Bucket=self.container.settings.document_bucket,
+                Key=marker_key,
+                Body=rendered.markdown,
+                ContentType="text/markdown; charset=utf-8",
+                ContentDisposition=(
+                    f'attachment; filename="{filename_stem}.md"'
+                ),
+                Metadata=metadata,
+            )
+
+        expires_in_seconds = 900
+        docx_filename = f"{filename_stem}.docx"
+        pdf_filename = f"{filename_stem}.pdf"
+        return DossierRenderSession(
+            project_id=project_id,
+            render_id=render_id,
+            title=content.title,
+            source_sha256=source_sha256,
+            docx_url=self._presign_dossier_download(
+                key=f"{prefix}/dossier.docx",
+                filename=docx_filename,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                expires_in_seconds=expires_in_seconds,
+            ),
+            pdf_url=self._presign_dossier_download(
+                key=f"{prefix}/dossier.pdf",
+                filename=pdf_filename,
+                content_type="application/pdf",
+                expires_in_seconds=expires_in_seconds,
+            ),
+            docx_filename=docx_filename,
+            pdf_filename=pdf_filename,
+            expires_in_seconds=expires_in_seconds,
+            reused_existing_render=existing_hash is not None,
+        )
+
     def prepare_document_upload(
         self,
         project_id: str,
@@ -614,6 +841,16 @@ class KnowledgeApplication:
     ) -> dict[str, Any]:
         self.require_authenticated(principal)
         self.require_project(project_id, principal=principal)
+        assigned_email = body.assigned_expert_email
+        if (
+            assigned_email is not None
+            and self.container.repository.get_user_profile(assigned_email)
+            is None
+        ):
+            raise NotFound(
+                "Requested answerer is not a registered verified user; use "
+                "search_user_directory to resolve a person by name"
+            )
         if question_id is not None:
             existing = self.container.repository.get_question(
                 project_id=project_id,
@@ -867,6 +1104,10 @@ class KnowledgeApplication:
             **project,
             "my_role": role,
             "can_edit": can_edit,
+            # Question participation is intentionally broader than project
+            # editing: every authenticated reader may ask and answer.
+            "can_ask_questions": True,
+            "can_answer_questions": True,
             "can_archive": principal.is_admin,
             "upload_page_url": upload_url,
         }
@@ -922,6 +1163,48 @@ class KnowledgeApplication:
                     f"{member_email.replace('@', '-')}"
                 ),
             )
+
+    def _dossier_marker_hash(self, key: str) -> str | None:
+        try:
+            response = self.container.s3.head_object(
+                Bucket=self.container.settings.document_bucket,
+                Key=key,
+            )
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise
+        metadata = response.get("Metadata") or {}
+        source_sha256 = str(metadata.get("source-sha256") or "")
+        if not source_sha256:
+            raise Conflict(
+                "The dossier request ID exists without source metadata"
+            )
+        return source_sha256
+
+    def _presign_dossier_download(
+        self,
+        *,
+        key: str,
+        filename: str,
+        content_type: str,
+        expires_in_seconds: int,
+    ) -> str:
+        return str(
+            self.container.s3.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self.container.settings.document_bucket,
+                    "Key": key,
+                    "ResponseContentType": content_type,
+                    "ResponseContentDisposition": (
+                        f'attachment; filename="{filename}"'
+                    ),
+                },
+                ExpiresIn=expires_in_seconds,
+            )
+        )
 
     def _application_base_url(self) -> str:
         value = self.container.settings.application_base_url

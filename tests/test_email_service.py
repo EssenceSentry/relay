@@ -52,7 +52,7 @@ def test_send_question_sets_reply_to_and_web_fallback() -> None:
     assert "#answer=" not in text
     assert "question_id=" not in text
     assert "Connect your agent" in html
-    assert "Blend360 Project Knowledge" in html
+    assert "Relay" in html
     assert "Reply directly to this email" in html
 
 

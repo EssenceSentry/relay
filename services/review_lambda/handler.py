@@ -42,6 +42,8 @@ _SEARCH = OpenSearchServerlessClient(
     index_name=_SETTINGS.opensearch_index,
     dimensions=_SETTINGS.embedding_dimensions,
 )
+
+
 def _email_sender() -> SesEmailService | None:
     if not _SETTINGS.email_enabled:
         return None

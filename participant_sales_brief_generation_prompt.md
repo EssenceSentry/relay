@@ -1,7 +1,7 @@
 # Participant sales brief generation
 
-Create a polished, evidence-backed Blend360 participant sales brief in
-Markdown for this project:
+Create a polished, evidence-backed Blend360 participant sales brief for this
+project:
 
 - Project ID: `[PROJECT_ID]`
 - Project or case-study name: `[PROJECT_NAME]`
@@ -9,17 +9,23 @@ Markdown for this project:
 
 ## Research workflow
 
-1. Call `list_project_documents` for the project and confirm that the relevant
-   documents are `READY`.
-2. Run several focused `search_project_knowledge` calls covering the client or project
-   context, challenge, solution, delivery and technology, key features, and
-   outcomes. Use `top_k=10` to `20` for this broad research.
-3. Search results are previews. Use `get_document_text` for every document that
-   materially supports the brief, including every source used for a metric.
-4. Reconcile duplicate or conflicting evidence. Prefer a source explicitly
+1. Start with several focused `search_all_projects` calls, even though the
+   project ID and name are supplied. Cover project identity, challenge,
+   solution, delivery or technology, features, and outcomes. Prefer precise
+   queries with `top_k=5` to `8`.
+2. Use `search_project_knowledge` to deepen or disambiguate evidence within the
+   supplied project.
+3. Search hits are previews. Use `get_document_text` for the strongest
+   documents that materially support the brief, including every source used
+   for a metric.
+4. Do not enumerate and read all project documents. Use
+   `list_project_documents` only as a last resort after multiple focused
+   searches fail, or to check whether a known source is missing or still
+   processing.
+5. Reconcile duplicate or conflicting evidence. Prefer a source explicitly
    identified as more final or current; otherwise disclose the conflict.
-5. Build the brief only from the project evidence you opened. Do not add
-   general knowledge, guessed details, or unsupported marketing claims.
+6. Build the brief only from project evidence you opened. Do not add general
+   knowledge, guessed details, or unsupported marketing claims.
 
 ## Evidence requirements
 
@@ -38,11 +44,15 @@ Markdown for this project:
 - Replace unsupported claims with a concise **Known gap** rather than guessing.
 - List only documents actually opened and cited in **Sources Used**.
 
-## Output
+## Output and rendering
 
-Return only the finished Markdown brief. Do not include retrieval scores,
-research narration, a private claim ledger, or an explanation of how the brief
-was produced.
+Draft the complete brief as Markdown using the exact section names below. Then
+call `render_project_dossier` with the complete Markdown and a stable
+`request_id`. Return both the editable DOCX and polished PDF links. Reuse the
+same request ID to refresh expired links.
+
+Do not include retrieval scores, research narration, a private claim ledger,
+or an explanation of how the brief was produced.
 
 Use this structure:
 
@@ -76,4 +86,5 @@ Keep the result concise, executive, specific, and scannable. Include
 **Relevant Visual Evidence** only when an informative chart, plot, table,
 diagram, architecture, process flow, or infographic materially improves
 understanding. Do not describe logos, banners, stock photography, decorative
-layouts, footer text, or other visual noise.
+layouts, footer text, or other visual noise. Omit the section when no relevant
+visual evidence exists.

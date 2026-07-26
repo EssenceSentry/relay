@@ -5,6 +5,7 @@ import pytest
 from knowledge_core.identity import (
     extract_blend_emails,
     names_are_plausibly_compatible,
+    normalize_blend_email,
     normalize_email,
     normalize_name_tokens,
 )
@@ -15,9 +16,10 @@ from knowledge_core.identity import (
     [
         (" Agustin.Sellanes@Blend360.COM ", "agustin.sellanes@blend360.com"),
         ("a+b@blend360.com", "a+b@blend360.com"),
+        (" Demo.User@Gmail.COM ", "demo.user@gmail.com"),
     ],
 )
-def test_normalize_email_accepts_only_valid_blend_addresses(
+def test_normalize_email_accepts_valid_account_addresses(
     value: str,
     expected: str,
 ) -> None:
@@ -27,18 +29,33 @@ def test_normalize_email_accepts_only_valid_blend_addresses(
 @pytest.mark.parametrize(
     "value",
     [
-        "person@example.com",
-        "person@sub.blend360.com",
+        "person",
+        "person@localhost",
         ".person@blend360.com",
         "person..name@blend360.com",
         "person)@blend360.com",
     ],
 )
-def test_normalize_email_rejects_other_domains_and_invalid_syntax(
+def test_normalize_email_rejects_invalid_syntax(
     value: str,
 ) -> None:
     with pytest.raises(ValueError):
         normalize_email(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "person@example.com",
+        "person@gmail.com",
+        "person@sub.blend360.com",
+    ],
+)
+def test_normalize_blend_email_rejects_non_blend_domains(
+    value: str,
+) -> None:
+    with pytest.raises(ValueError):
+        normalize_blend_email(value)
 
 
 def test_extract_blend_emails_handles_case_and_punctuation() -> None:
@@ -79,4 +96,8 @@ def test_name_filter_allows_initials_but_requires_compatible_surname() -> None:
     assert not names_are_plausibly_compatible(
         email="m.perez@blend360.com",
         contributor_name="María Rodríguez",
+    )
+    assert not names_are_plausibly_compatible(
+        email="maria.perez@gmail.com",
+        contributor_name="María Pérez",
     )

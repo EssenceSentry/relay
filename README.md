@@ -13,6 +13,9 @@ normal development or test commands.
 ## Core behavior
 
 - Cognito password authentication for verified `@blend360.com` employees.
+  The hackathon deployment temporarily also permits any verified `@gmail.com`
+  identity because Blend quarantines Cognito email; this is an explicitly
+  flagged demo workaround, not the production authorization policy.
 - Provider-neutral user profiles and a Cognito `admins` group.
 - All verified employees can discover and read active projects and ask or
   answer questions.
@@ -60,11 +63,12 @@ Every authenticated API operation has a same-named, typed MCP tool:
 
 | Area | Operations |
 | --- | --- |
-| Account | `get_current_user`, `list_my_notifications`, `mark_notification_read`, `list_my_collaboration_invitations`, `decide_collaboration_invitation` |
+| Account | `get_current_user`, `search_user_directory`, `list_my_notifications`, `mark_notification_read`, `list_my_collaboration_invitations`, `decide_collaboration_invitation` |
 | Projects | `list_projects`, `get_project`, `create_project`, `rename_project`, `archive_project`, `restore_project` |
 | Collaboration | `list_project_collaborators`, `invite_project_collaborator`, `remove_project_collaborator` |
 | Retrieval | `search_all_projects`, `search_project_knowledge`, `list_project_documents`, `get_document`, `get_document_text`, `get_document_download_url` |
 | Uploads | `prepare_document_upload` |
+| Dossiers | `render_project_dossier` |
 | Facts | `list_verified_facts`, `create_verified_fact` |
 | Questions | `list_project_questions`, `list_my_assigned_questions`, `get_project_question`, `list_question_answers`, `create_project_question`, `submit_question_answer`, `review_question_answer`, `resend_question_email` |
 
@@ -104,6 +108,25 @@ Supported extensions are PDF, DOC, DOCX, PPTX, TXT, Markdown, CSV, and JSON.
 The authenticated browser limit is 100 MiB per file; the model-level ceiling
 matches it.
 
+## Dossier rendering
+
+The dossier skill researches a project, opens the material sources, and writes
+the final cited Markdown locally. `render_project_dossier` then validates that
+editorial contract and returns private, 15-minute download links for:
+
+- an editable DOCX dossier;
+- a polished PDF dossier.
+
+The renderer makes no LLM calls and does not rewrite the agent's claims. It
+stores the source Markdown and generated LaTeX beside the rendered files in
+the private document bucket. A stable `request_id` makes retries idempotent;
+reusing it with different Markdown is rejected.
+
+The corresponding API operation is
+`POST /api/projects/{project_id}/dossiers/render`. Any authenticated employee
+who can read the active project can render a dossier. The rendered files are
+not indexed as project evidence and are not sent outside Relay.
+
 ## Ingestion
 
 PDF, DOC, DOCX, and PPTX are rendered as if printed. Deterministic extracted
@@ -124,9 +147,10 @@ rebuildable BM25 text and `text-embedding-3-large` vectors.
 
 ## Questions and email answers
 
-Questions may target an exact verified Blend address. Project members and the
-requested person receive durable inbox notifications; email is asynchronous
-and best effort.
+Questions may target an exact verified registered user. Agents resolve a named
+answerer through `search_user_directory` and never infer an email address.
+Project members and the requested person receive durable inbox notifications;
+email is asynchronous and best effort.
 
 Answers can contain text, up to ten same-project `READY` document IDs, or both.
 Member/admin answers proceed to LLM sufficiency review. Other employee answers
@@ -190,14 +214,14 @@ or answer submission.
 
 ## Agent plugin
 
-`frontend/downloads/blend-project-knowledge-bundle.zip` is a deterministic
-Codex/Claude bundle at version `1.0.0`. It contains the authenticated remote MCP
+`frontend/downloads/relay-bundle.zip` is a deterministic
+Codex/Claude bundle at version `1.0.1`. It contains the authenticated remote MCP
 configuration and two skills:
 
 - `manage-project-knowledge`: safe project, collaborator, retrieval, upload,
   fact, inbox, and question workflows;
 - `create-project-dossier`: evidence-first dossiers and participant sales
-  briefs with inline citations.
+  briefs with inline citations, rendered to editable DOCX and polished PDF.
 
 The MCP also exposes
 `participant_sales_brief_generation(project_id, project_name,
@@ -229,11 +253,11 @@ Validate both skills:
 ```bash
 uv run --with pyyaml python \
   ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  plugins/blend-project-knowledge/skills/manage-project-knowledge
+  plugins/relay/skills/manage-project-knowledge
 
 uv run --with pyyaml python \
   ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  plugins/blend-project-knowledge/skills/create-project-dossier
+  plugins/relay/skills/create-project-dossier
 ```
 
 Synthesize without deploying:
@@ -252,6 +276,8 @@ The script loads non-secret context from `.env`, deploys infrastructure,
 outputs the frontend/API/MCP URLs, and finalizes CloudFront OAuth/CORS settings.
 Set `PUBLIC_DOMAIN=essencesentry.shop` and `EMAIL_DOMAIN=essencesentry.shop` for
 the hackathon domain. `MCP_AUTH_ENABLED` must remain `1`.
+`DEMO_ALLOW_GMAIL_LOGINS=1` is a temporary hackathon-only workaround and must
+be removed when Blend Microsoft SSO becomes the identity provider.
 
 After a stack exists:
 

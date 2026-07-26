@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "blend-project-knowledge": {
+    "relay": {
       "type": "http",
       "url": "https://essencesentry.shop/mcp/"
     }

@@ -28,13 +28,42 @@ class McpCurrentUser(McpModel):
     profile: dict[str, Any] | None = None
 
 
+class McpDirectoryUser(McpModel):
+    display_name: str
+    email: str
+    identity_source: str
+    match_type: Literal[
+        "EXACT_EMAIL",
+        "EXACT_NAME",
+        "NAME_TOKENS",
+        "NAME_OR_EMAIL_TOKENS",
+    ]
+
+
 class McpProject(McpModel):
     project_id: str
     name: str
     description: str | None = None
     status: str = "ACTIVE"
     my_role: str
-    can_edit: bool
+    can_edit: bool = Field(
+        description=(
+            "Whether the current user may modify project content. This does "
+            "not control permission to ask or answer questions."
+        )
+    )
+    can_ask_questions: bool = Field(
+        description=(
+            "Whether the current user may create project questions. This is "
+            "true for every authenticated reader of an active project."
+        )
+    )
+    can_answer_questions: bool = Field(
+        description=(
+            "Whether the current user may submit answers. Non-collaborator "
+            "answers are routed through member review."
+        )
+    )
     can_archive: bool
     upload_page_url: str | None = None
     created_at: str | None = None
@@ -150,9 +179,7 @@ class McpDocumentUpload(McpModel):
                     "already reached ingestion. "
                 )
             )
-            + (
-                "Poll get_document until status is READY or FAILED."
-            ),
+            + ("Poll get_document until status is READY or FAILED."),
         )
 
 
@@ -274,6 +301,24 @@ class McpDocumentDownload(McpModel):
     content_type: str
     url: str
     expires_in_seconds: int
+
+
+class McpDossierRender(McpModel):
+    project_id: str
+    render_id: str
+    title: str
+    source_sha256: str
+    docx_url: str
+    pdf_url: str
+    docx_filename: str
+    pdf_filename: str
+    expires_in_seconds: int
+    reused_existing_render: bool
+    next_action: str = (
+        "Give the user both download links. Explain that the links expire and "
+        "rerun this tool with the same request_id to refresh them without "
+        "creating another render."
+    )
 
 
 class McpVerifiedFact(McpModel):

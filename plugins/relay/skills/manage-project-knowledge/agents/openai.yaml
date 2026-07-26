@@ -5,8 +5,8 @@ interface:
 dependencies:
   tools:
     - type: "mcp"
-      value: "blend-project-knowledge"
-      description: "Authenticated Blend project operations and evidence retrieval."
+      value: "relay"
+      description: "Authenticated Relay project operations and evidence retrieval."
       transport: "streamable_http"
       url: "https://essencesentry.shop/mcp/"
 policy:

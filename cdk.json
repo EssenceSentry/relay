@@ -10,6 +10,7 @@
     "matching_model": "gpt-5.6-luna",
     "matching_threshold": 0.95,
     "name_invitations_enabled": false,
+    "demo_allow_gmail_logins": false,
     "cognito_use_ses_email": false
   }
 }

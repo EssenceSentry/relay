@@ -102,10 +102,11 @@ def test_rename_project_endpoint_returns_updated_project() -> None:
         "updated_by": "owner@blend360.com",
         "my_role": "AUTHOR",
         "can_edit": True,
+        "can_ask_questions": True,
+        "can_answer_questions": True,
         "can_archive": False,
         "upload_page_url": (
-            "https://knowledge.example.com/upload.html"
-            "?upload_project_id=prj_1"
+            "https://knowledge.example.com/upload.html?upload_project_id=prj_1"
         ),
     }
     assert repository.calls == [

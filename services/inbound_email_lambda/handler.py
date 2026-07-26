@@ -206,16 +206,12 @@ def _quarantine_attachments(
     stored: list[dict[str, Any]] = []
     for index, attachment in enumerate(attachments, start=1):
         digest = hashlib.sha256(
-            (
-                f"{message_id}\0{index}\0{attachment.sha256}"
-            ).encode()
+            (f"{message_id}\0{index}\0{attachment.sha256}").encode()
         ).hexdigest()
         attachment_id = f"att_{digest[:32]}"
         document_id = f"doc_email_{digest[:32]}"
         filename = safe_filename(attachment.filename)
-        key = (
-            f"answer-attachments/{message_id}/{attachment_id}/{filename}"
-        )
+        key = f"answer-attachments/{message_id}/{attachment_id}/{filename}"
         _S3.put_object(
             Bucket=_SETTINGS.inbound_bucket,
             Key=key,

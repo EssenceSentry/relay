@@ -162,10 +162,13 @@ def main() -> None:
                 markdown=markdown,
             )
             emails = ", ".join(extraction.blend360_emails) or "none"
-            names = ", ".join(
-                candidate.display_name
-                for candidate in extraction.contributors
-            ) or "none"
+            names = (
+                ", ".join(
+                    candidate.display_name
+                    for candidate in extraction.contributors
+                )
+                or "none"
+            )
             print(
                 f"{'APPLY' if args.apply else 'DRY-RUN'} "
                 f"{project_id}/{document['document_id']}: "

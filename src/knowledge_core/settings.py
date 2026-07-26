@@ -24,6 +24,24 @@ def env_bool(name: str, default: bool = False) -> bool:
     raise RuntimeError(f"{name} must be a boolean value, got {raw!r}")
 
 
+def env_email_domains(
+    name: str,
+    default: str,
+) -> frozenset[str]:
+    domains = frozenset(
+        domain.strip().casefold().rstrip(".")
+        for domain in os.environ.get(name, default).split(",")
+        if domain.strip()
+    )
+    if not domains or any(
+        "@" in domain or "." not in domain for domain in domains
+    ):
+        raise RuntimeError(
+            f"{name} must be a comma-separated list of email domains"
+        )
+    return domains
+
+
 def _common_values(common: CommonSettings) -> dict[str, Any]:
     return {
         field: getattr(common, field)
@@ -104,9 +122,9 @@ class IngestionSettings(CommonSettings):
             ingestion_queue_url=required_env("INGESTION_QUEUE_URL"),
             matching_queue_url=required_env("MATCHING_QUEUE_URL"),
             notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
-            application_base_url=required_env(
-                "APPLICATION_BASE_URL"
-            ).rstrip("/"),
+            application_base_url=required_env("APPLICATION_BASE_URL").rstrip(
+                "/"
+            ),
         )
 
 
@@ -114,6 +132,7 @@ class IngestionSettings(CommonSettings):
 class ApiSettings(CommonSettings):
     user_pool_id: str
     user_pool_client_id: str
+    allowed_login_email_domains: frozenset[str]
     mcp_auth_enabled: bool
     mcp_cognito_client_id: str
     mcp_cognito_domain: str
@@ -133,6 +152,10 @@ class ApiSettings(CommonSettings):
             **_common_values(common),
             user_pool_id=required_env("USER_POOL_ID"),
             user_pool_client_id=required_env("USER_POOL_CLIENT_ID"),
+            allowed_login_email_domains=env_email_domains(
+                "ALLOWED_LOGIN_EMAIL_DOMAINS",
+                "blend360.com",
+            ),
             mcp_auth_enabled=env_bool("MCP_AUTH_ENABLED", True),
             mcp_cognito_client_id=required_env("MCP_COGNITO_CLIENT_ID"),
             mcp_cognito_domain=required_env("MCP_COGNITO_DOMAIN").rstrip("/"),
@@ -214,9 +237,9 @@ class MatchingSettings(CommonSettings):
                 False,
             ),
             notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
-            application_base_url=required_env(
-                "APPLICATION_BASE_URL"
-            ).rstrip("/"),
+            application_base_url=required_env("APPLICATION_BASE_URL").rstrip(
+                "/"
+            ),
         )
 
 
@@ -274,7 +297,7 @@ class InboundEmailSettings:
                 )
             ),
             notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
-            application_base_url=required_env(
-                "APPLICATION_BASE_URL"
-            ).rstrip("/"),
+            application_base_url=required_env("APPLICATION_BASE_URL").rstrip(
+                "/"
+            ),
         )
