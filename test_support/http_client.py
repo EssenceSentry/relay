@@ -26,6 +26,15 @@ class HttpTestClient(Protocol):
         headers: Mapping[str, str] | None = None,
     ) -> Response: ...
 
+    def patch(
+        self,
+        url: str,
+        *,
+        json: object | None = None,
+        params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Response: ...
+
 
 def make_test_client(app: FastAPI) -> HttpTestClient:
     return TestClient(app)

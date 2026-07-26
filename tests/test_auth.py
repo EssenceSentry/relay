@@ -3,12 +3,24 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import app.auth as auth_module
 import pytest
-from app.auth import make_principal_dependency
-from app.routes import build_api_router
-from fastapi import FastAPI, HTTPException
+from app.auth import CognitoVerifier, make_principal_dependency
+from fastapi import HTTPException
+from jwt import PyJWKClient
 
-from test_support.http_client import make_test_client
+
+class FakeSigningKey:
+    key = "public-key"
+
+
+class FakeSigningKeyClient(PyJWKClient):
+    def __init__(self) -> None:
+        pass
+
+    def get_signing_key_from_jwt(self, token: str | bytes) -> Any:
+        assert token == "valid-token"
+        return FakeSigningKey()
 
 
 def _container(*, auth_enabled: bool) -> Any:
@@ -22,15 +34,12 @@ def _container(*, auth_enabled: bool) -> Any:
     )
 
 
-def test_public_mode_allows_requests_without_a_bearer_token() -> None:
-    dependency = make_principal_dependency(_container(auth_enabled=False))
-
-    principal = dependency(None)
-
-    assert principal.subject == "public-hackathon-user"
-    assert principal.email == "public@hackathon.local"
-    assert principal.groups == frozenset()
-    assert principal.claims == {"authentication_mode": "public"}
+def test_public_mode_is_rejected_by_contract_v1() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="Authentication is required",
+    ):
+        make_principal_dependency(_container(auth_enabled=False))
 
 
 def test_authenticated_mode_still_requires_a_bearer_token() -> None:
@@ -43,22 +52,67 @@ def test_authenticated_mode_still_requires_a_bearer_token() -> None:
     assert error.value.detail == "Missing bearer token"
 
 
-def test_public_principal_is_resolved_as_a_route_dependency() -> None:
-    container = _container(auth_enabled=False)
-    app = FastAPI()
-    app.include_router(
-        build_api_router(
-            container,
-            make_principal_dependency(container),
-        )
+def _verifier(monkeypatch: pytest.MonkeyPatch, claims: dict[str, Any]):
+    verifier = CognitoVerifier(
+        region="us-east-1",
+        user_pool_id="us-east-1_example",
+        client_id="client-id",
+    )
+    verifier._jwk_client = FakeSigningKeyClient()  # pyright: ignore[reportPrivateUsage]
+
+    def decode(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        return claims
+
+    monkeypatch.setattr(auth_module.jwt, "decode", decode)
+    return verifier
+
+
+def test_cognito_verifier_requires_verified_blend_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unverified = _verifier(
+        monkeypatch,
+        {
+            "sub": "user-1",
+            "email": "person@blend360.com",
+            "email_verified": False,
+            "token_use": "id",
+        },
+    )
+    with pytest.raises(HTTPException) as unverified_error:
+        unverified.verify("valid-token")
+    assert unverified_error.value.status_code == 403
+
+    external = _verifier(
+        monkeypatch,
+        {
+            "sub": "user-1",
+            "email": "person@example.com",
+            "email_verified": True,
+            "token_use": "id",
+        },
+    )
+    with pytest.raises(HTTPException) as external_error:
+        external.verify("valid-token")
+    assert external_error.value.status_code == 403
+
+
+def test_cognito_verifier_returns_groups_and_normalized_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier(
+        monkeypatch,
+        {
+            "sub": "user-1",
+            "email": "Person@Blend360.COM",
+            "email_verified": "true",
+            "token_use": "id",
+            "cognito:groups": ["admins"],
+        },
     )
 
-    response = make_test_client(app).get("/api/me")
+    principal = verifier.verify("valid-token")
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "subject": "public-hackathon-user",
-        "email": "public@hackathon.local",
-        "groups": [],
-        "is_admin": False,
-    }
+    assert principal.email == "person@blend360.com"
+    assert principal.is_admin

@@ -1,0 +1,13 @@
+interface:
+  display_name: "Manage Project Knowledge"
+  short_description: "Manage Blend projects safely through an agent"
+  default_prompt: "Use $manage-project-knowledge to manage a Blend project through the authenticated knowledge service."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "blend-project-knowledge"
+      description: "Authenticated Blend project operations and evidence retrieval."
+      transport: "streamable_http"
+      url: "https://essencesentry.shop/mcp/"
+policy:
+  allow_implicit_invocation: true

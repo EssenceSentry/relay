@@ -24,7 +24,13 @@ def format_answer_history(
         raise ValueError("max_chars_per_answer must be positive")
 
     cleaned = [
-        answer for answer in answers if str(answer.get("answer") or "").strip()
+        answer
+        for answer in answers
+        if (
+            str(answer.get("answer") or "").strip()
+            or answer.get("supporting_document_ids")
+            or answer.get("attachments")
+        )
     ]
     if not cleaned:
         raise ValueError("No usable expert answers were available for review")
@@ -61,8 +67,12 @@ def format_answer_history(
             )
 
     if len(selected) == 1:
+        text = str(selected[0].get("answer") or "").strip()
+        if not text:
+            text = "[No reply text; see supporting document evidence.]"
         return _truncate(
-            str(selected[0]["answer"]).strip(), max_chars_per_answer
+            text,
+            max_chars_per_answer,
         )
 
     blocks = [
@@ -77,7 +87,10 @@ def format_answer_history(
         source = str(answer.get("answer_source") or "unknown").casefold()
         timestamp = str(answer.get("created_at") or "unknown time")
         author = str(answer.get("answered_by") or "assigned expert")
-        text = _truncate(str(answer["answer"]).strip(), max_chars_per_answer)
+        text = str(answer.get("answer") or "").strip()
+        if not text:
+            text = "[No reply text; see supporting document evidence.]"
+        text = _truncate(text, max_chars_per_answer)
         blocks.append(
             f"Response {index}{current_suffix} — {timestamp}; {source}; {author}:\n{text}"
         )

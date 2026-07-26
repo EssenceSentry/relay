@@ -16,6 +16,11 @@ from botocore.exceptions import ClientError
 from mypy_boto3_cognito_idp import CognitoIdentityProviderClient
 from mypy_boto3_cognito_idp.type_defs import AttributeTypeTypeDef
 
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPOSITORY_ROOT / "src"))
+
+from knowledge_core.identity import normalize_email  # noqa: E402
+
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -35,6 +40,11 @@ def _arguments() -> argparse.Namespace:
         action="store_true",
         default=os.environ.get("ADMIN") == "1",
         help="Add the user to the admins group.",
+    )
+    parser.add_argument(
+        "--remove-admin",
+        action="store_true",
+        help="Remove the user from the admins group.",
     )
     parser.add_argument(
         "--send-invitation",
@@ -102,9 +112,12 @@ def main() -> None:
     args = _arguments()
     if not args.email:
         raise SystemExit("Pass an email address or set EMAIL.")
-    email = args.email.strip().casefold()
-    if "@" not in email:
-        raise SystemExit(f"Invalid email address: {email!r}")
+    if args.admin and args.remove_admin:
+        raise SystemExit("Choose either --admin or --remove-admin.")
+    try:
+        email = normalize_email(args.email)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     password = _password(args)
 
     context = load_stack_context(args.outputs_file, args.stack)
@@ -165,13 +178,25 @@ def main() -> None:
             Username=email,
             GroupName="admins",
         )
+    elif args.remove_admin:
+        client.admin_remove_user_from_group(
+            UserPoolId=pool_id,
+            Username=email,
+            GroupName="admins",
+        )
 
     password_note = (
         "Cognito invitation requested"
         if args.send_invitation
         else "permanent password configured"
     )
-    admin_note = ", admin enabled" if args.admin else ""
+    admin_note = (
+        ", admin enabled"
+        if args.admin
+        else ", admin removed"
+        if args.remove_admin
+        else ""
+    )
     print(f"{action} {email}: {password_note}{admin_note}.")
 
 

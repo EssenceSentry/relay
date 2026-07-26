@@ -12,6 +12,8 @@ _SCRIPTS = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 bootstrap = importlib.import_module("_bootstrap_aws")
 ingest = importlib.import_module("ingest_local_documents")
+project_mapping = importlib.import_module("_project_mapping")
+reassign = importlib.import_module("reassign_documents")
 status = importlib.import_module("ingestion_status")
 configure_sso = importlib.import_module("configure_sso")
 
@@ -147,10 +149,218 @@ def test_status_report_includes_failed_document_ids(tmp_path: Path) -> None:
         )
     )
 
-    project_id, document_ids = status._load_report(report)
+    selections = status._load_report(report)
 
-    assert project_id == "prj_test"
-    assert document_ids == {"doc_ok", "doc_failed"}
+    assert selections == {"prj_test": {"doc_ok", "doc_failed"}}
+
+
+def test_status_report_supports_multiple_projects(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "project_id": "prj_one",
+                        "document_id": "doc_one",
+                    },
+                    {
+                        "project_id": "prj_two",
+                        "document_id": "doc_two",
+                    },
+                ]
+            }
+        )
+    )
+
+    selections = status._load_report(report)
+
+    assert selections == {
+        "prj_one": {"doc_one"},
+        "prj_two": {"doc_two"},
+    }
+
+
+def test_project_mapping_resolves_relative_files(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    first = source / "first.pdf"
+    second = nested / "second.pptx"
+    first.write_bytes(b"pdf")
+    second.write_bytes(b"deck")
+    mapping_path = tmp_path / "mapping.json"
+    mapping_path.write_text(
+        json.dumps(
+            {
+                "P1": {"title": "First project", "files": ["first.pdf"]},
+                "P2": {
+                    "title": "Second project",
+                    "files": ["nested/second.pptx"],
+                },
+            }
+        )
+    )
+
+    groups = project_mapping.load_project_mapping(mapping_path)
+    resolved = project_mapping.resolve_mapped_files(
+        source=source,
+        available_files=[first, second],
+        groups=groups,
+    )
+
+    assert resolved[first].key == "P1"
+    assert resolved[second].key == "P2"
+
+
+def test_project_mapping_rejects_duplicate_assignments(tmp_path: Path) -> None:
+    mapping_path = tmp_path / "mapping.json"
+    mapping_path.write_text(
+        json.dumps(
+            {
+                "P1": {"title": "First", "files": ["same.pdf"]},
+                "P2": {"title": "Second", "files": ["same.pdf"]},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="assigned to both"):
+        project_mapping.load_project_mapping(mapping_path)
+
+
+def test_reassignment_loads_document_reference(tmp_path: Path) -> None:
+    markdown_dir = tmp_path / "markdown"
+    markdown_dir.mkdir()
+    markdown = markdown_dir / "source.pptx.md"
+    markdown.write_text(
+        "> Original file: `source.pptx` "
+        "(`s3://documents/uploads/prj_source/doc_123/source.pptx`).\n\n"
+        "# Project\n"
+    )
+    group = project_mapping.ProjectFileGroup(
+        key="P1",
+        title="Project one",
+        files=(markdown.name,),
+    )
+
+    mapped = reassign.load_mapped_markdown(
+        groups=(group,),
+        markdown_dir=markdown_dir,
+    )
+    assignments = reassign.resolve_assignments(
+        mapped_markdown=mapped,
+        documents={
+            "doc_123": {
+                "document_id": "doc_123",
+                "document_name": "source.pptx",
+                "s3_bucket": "documents",
+                "s3_key": "uploads/prj_source/doc_123/source.pptx",
+            }
+        },
+        source_project_id="prj_source",
+    )
+
+    assert len(assignments) == 1
+    assert assignments[0].document_id == "doc_123"
+    assert assignments[0].s3_bucket == "documents"
+    assert assignments[0].s3_key.endswith("/source.pptx")
+
+
+def test_reassignment_falls_back_to_document_name(tmp_path: Path) -> None:
+    markdown_dir = tmp_path / "markdown"
+    markdown_dir.mkdir()
+    markdown = markdown_dir / "source.pptx.md"
+    markdown.write_text("# Project\n")
+    group = project_mapping.ProjectFileGroup(
+        key="P1",
+        title="Project one",
+        files=(markdown.name,),
+    )
+
+    mapped = reassign.load_mapped_markdown(
+        groups=(group,),
+        markdown_dir=markdown_dir,
+    )
+    assignments = reassign.resolve_assignments(
+        mapped_markdown=mapped,
+        documents={
+            "doc_123": {
+                "document_id": "doc_123",
+                "document_name": "source.pptx",
+                "s3_bucket": "documents",
+                "s3_key": "uploads/prj_source/doc_123/source.pptx",
+            }
+        },
+        source_project_id="prj_source",
+    )
+
+    assert assignments[0].document_id == "doc_123"
+
+
+class _QueryTable:
+    def __init__(self, documents: list[dict[str, Any]]) -> None:
+        self.documents = documents
+
+    def query(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {"Items": self.documents}
+
+
+def test_reassignment_can_resolve_documents_already_moved() -> None:
+    target = {
+        "document_id": "doc_target",
+        "document_name": "target.pdf",
+        "s3_bucket": "documents",
+        "s3_key": "uploads/prj_source/doc_target/target.pdf",
+    }
+
+    candidates = reassign._candidate_documents(
+        _QueryTable([target]),
+        source_documents={},
+        existing_projects={
+            "P1": {
+                "project_id": "prj_target",
+            }
+        },
+    )
+
+    assert candidates == {"doc_target": target}
+
+
+def test_reassignment_deletes_stale_source_search_entries(
+    tmp_path: Path,
+) -> None:
+    group = project_mapping.ProjectFileGroup(
+        key="P1",
+        title="Project one",
+        files=("source.pdf.md",),
+    )
+    assignment = reassign.DocumentAssignment(
+        group=group,
+        markdown_name="source.pdf.md",
+        markdown_path=tmp_path / "source.pdf.md",
+        document_id="doc_123",
+        s3_bucket="documents",
+        s3_key="uploads/prj_source/doc_123/source.pdf",
+    )
+
+    index_ids = reassign._mapped_source_index_ids(
+        [
+            {
+                "_id": "actual-index-id",
+                "index_id": "stored-index-id",
+                "document_id": "doc_123",
+            },
+            {
+                "_id": "unrelated-index-id",
+                "index_id": "unrelated-index-id",
+                "document_id": "doc_other",
+            },
+        ],
+        assignments=(assignment,),
+    )
+
+    assert index_ids == ["actual-index-id"]
 
 
 def test_parse_extensions_rejects_unsupported_values() -> None:

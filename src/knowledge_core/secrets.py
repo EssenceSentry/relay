@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from threading import Lock
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import boto3
-from mypy_boto3_secretsmanager import SecretsManagerClient
+
+if TYPE_CHECKING:
+    from mypy_boto3_secretsmanager import SecretsManagerClient
 
 
 class SecretProvider:

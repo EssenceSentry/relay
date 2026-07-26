@@ -65,22 +65,23 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_report(path: Path) -> tuple[str, set[str]]:
+def _load_report(path: Path) -> dict[str, set[str]]:
     try:
         payload = json.loads(path.read_text())
     except FileNotFoundError as exc:
         raise SystemExit(f"Ingestion report not found: {path}") from exc
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Ingestion report is invalid JSON: {path}") from exc
-    project_id = payload.get("project_id")
-    if not isinstance(project_id, str):
-        raise SystemExit(f"Report has no project_id: {path}")
-    document_ids = {
-        item["document_id"]
-        for item in payload.get("results", [])
-        if isinstance(item.get("document_id"), str)
-    }
-    return project_id, document_ids
+    root_project_id = payload.get("project_id")
+    selections: dict[str, set[str]] = {}
+    for item in payload.get("results", []):
+        document_id = item.get("document_id")
+        project_id = item.get("project_id", root_project_id)
+        if isinstance(document_id, str) and isinstance(project_id, str):
+            selections.setdefault(project_id, set()).add(document_id)
+    if not selections:
+        raise SystemExit(f"Report has no project documents: {path}")
+    return selections
 
 
 def _list_documents(table: Any, project_id: str) -> list[dict[str, Any]]:
@@ -160,6 +161,36 @@ def _result_payload(
     }
 
 
+def _combined_result_payload(
+    payloads: list[dict[str, Any]],
+) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    failures: list[dict[str, Any]] = []
+    for payload in payloads:
+        counts.update(payload["counts"])
+        failures.extend(payload["failures"])
+    return {
+        "projects": payloads,
+        "total": sum(int(payload["total"]) for payload in payloads),
+        "counts": dict(sorted(counts.items())),
+        "failures": failures,
+    }
+
+
+def _selection_complete(
+    documents: list[dict[str, Any]],
+    document_ids: set[str] | None,
+) -> bool:
+    expected_count = (
+        len(document_ids) if document_ids is not None else len(documents)
+    )
+    return (
+        bool(documents)
+        and len(documents) == expected_count
+        and all(item.get("status") in TERMINAL_STATUSES for item in documents)
+    )
+
+
 def main() -> None:
     args = _arguments()
     if args.timeout <= 0:
@@ -167,13 +198,13 @@ def main() -> None:
     if args.poll_interval <= 0:
         raise SystemExit("--poll-interval must be greater than zero.")
 
-    report_project_id: str | None = None
-    document_ids: set[str] | None = None
-    if args.report:
-        report_project_id, document_ids = _load_report(args.report)
-    project_id = args.project_id or report_project_id
-    if args.project_id and report_project_id != args.project_id and args.report:
-        raise SystemExit("--project-id does not match the ingestion report.")
+    report_selections = _load_report(args.report) if args.report else {}
+    if (
+        args.project_id
+        and report_selections
+        and args.project_id not in report_selections
+    ):
+        raise SystemExit("--project-id is not present in the ingestion report.")
 
     context = load_stack_context(args.outputs_file, args.stack)
     session = create_session(
@@ -188,54 +219,90 @@ def main() -> None:
     )
     table = session.resource("dynamodb").Table(table_name)
 
-    if project_id:
-        project = get_project(table, project_id)
+    projects: dict[str, dict[str, Any]] = {}
+    selections: dict[str, set[str] | None] = {}
+    if args.project_id:
+        project = get_project(table, args.project_id)
+        if project is not None:
+            projects[args.project_id] = project
+            selections[args.project_id] = report_selections.get(args.project_id)
     elif args.project_name:
         project = find_project_by_name(table, args.project_name)
+        if project is not None:
+            project_id = str(project["project_id"])
+            projects[project_id] = project
+            selections[project_id] = report_selections.get(project_id)
+    elif report_selections:
+        for project_id, document_ids in report_selections.items():
+            project = get_project(table, project_id)
+            if project is None:
+                raise SystemExit(f"Project not found: {project_id}")
+            projects[project_id] = project
+            selections[project_id] = document_ids
     else:
         raise SystemExit(
             "Pass --project-id, --project-name, or an ingestion --report."
         )
-    if project is None:
+    if not projects:
         raise SystemExit("Project not found.")
-    project_id = str(project["project_id"])
 
     deadline = time.monotonic() + args.timeout
-    previous: Counter[str] | None = None
+    previous: dict[str, Counter[str]] = {}
     while True:
-        documents = _snapshot(
-            table,
-            project_id=project_id,
-            document_ids=document_ids,
-        )
-        counts = _counts(documents)
-        if not args.json and counts != previous:
-            print(
-                f"{project['name']} ({project_id}): "
-                f"{len(documents)} documents; {_render_counts(counts)}"
+        documents_by_project = {
+            project_id: _snapshot(
+                table,
+                project_id=project_id,
+                document_ids=selections[project_id],
             )
-            previous = counts
+            for project_id in projects
+        }
+        if not args.json:
+            for project_id, documents in documents_by_project.items():
+                counts = _counts(documents)
+                if counts != previous.get(project_id):
+                    print(
+                        f"{projects[project_id]['name']} ({project_id}): "
+                        f"{len(documents)} documents; {_render_counts(counts)}"
+                    )
+                    previous[project_id] = counts
 
-        expected_count = (
-            len(document_ids) if document_ids is not None else len(documents)
-        )
-        complete = (
-            bool(documents)
-            and len(documents) == expected_count
-            and all(
-                item.get("status") in TERMINAL_STATUSES for item in documents
+        complete = all(
+            _selection_complete(
+                documents,
+                selections[project_id],
             )
+            for project_id, documents in documents_by_project.items()
         )
         if not args.wait or complete:
             break
         if time.monotonic() >= deadline:
-            payload = _result_payload(project, documents)
+            payloads = [
+                _result_payload(
+                    projects[project_id],
+                    documents,
+                )
+                for project_id, documents in documents_by_project.items()
+            ]
+            payload = (
+                payloads[0]
+                if len(payloads) == 1
+                else _combined_result_payload(payloads)
+            )
             if args.json:
                 print(json.dumps(payload, default=str, indent=2))
             raise SystemExit("Timed out waiting for ingestion.")
         time.sleep(args.poll_interval)
 
-    payload = _result_payload(project, documents)
+    payloads = [
+        _result_payload(projects[project_id], documents)
+        for project_id, documents in documents_by_project.items()
+    ]
+    payload = (
+        payloads[0]
+        if len(payloads) == 1
+        else _combined_result_payload(payloads)
+    )
     if args.json:
         print(json.dumps(payload, default=str, indent=2))
     else:

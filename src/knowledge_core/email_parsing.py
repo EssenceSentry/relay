@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -10,12 +11,28 @@ from email.utils import getaddresses
 from html.parser import HTMLParser
 from typing import ClassVar
 
+from knowledge_core.document_formats import (
+    SUPPORTED_DOCUMENT_SUFFIXES,
+    document_suffix,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedInboundAttachment:
+    filename: str
+    content_type: str
+    body: bytes
+    size_bytes: int
+    sha256: str
+
 
 @dataclass(frozen=True, slots=True)
 class ParsedInboundEmail:
     sender: str
     subject: str
     reply_text: str
+    attachments: tuple[ParsedInboundAttachment, ...] = ()
+    attachment_errors: tuple[str, ...] = ()
 
 
 _TOKEN_RE_TEMPLATE = r"^kg-([A-Za-z0-9_-]{{16,}})@{domain}$"
@@ -51,6 +68,8 @@ def parse_inbound_email(
     raw_message: bytes,
     *,
     max_answer_chars: int = 20_000,
+    max_attachment_count: int = 10,
+    max_total_attachment_bytes: int = 25 * 1024 * 1024,
 ) -> ParsedInboundEmail:
     message = BytesParser(policy=policy.default).parsebytes(raw_message)
     sender = _first_address(message.get_all("from", []))
@@ -58,14 +77,24 @@ def parse_inbound_email(
         raise ValueError("Incoming email has no usable From address")
     body = _extract_body(message)
     reply = strip_quoted_reply(body).strip()
-    if not reply:
-        raise ValueError("Incoming email did not contain a usable reply")
     if len(reply) > max_answer_chars:
         reply = reply[:max_answer_chars].rstrip()
+    attachments, attachment_errors = _extract_attachments(
+        message,
+        max_attachment_count=max_attachment_count,
+        max_total_attachment_bytes=max_total_attachment_bytes,
+    )
+    if not reply and not attachments:
+        raise ValueError(
+            "Incoming email did not contain usable reply text or a supported "
+            "attachment"
+        )
     return ParsedInboundEmail(
         sender=sender.casefold(),
         subject=str(message.get("subject") or "").strip(),
         reply_text=reply,
+        attachments=attachments,
+        attachment_errors=attachment_errors,
     )
 
 
@@ -140,6 +169,65 @@ def _part_text(part: EmailMessage) -> str:
     if isinstance(content, bytes):
         return content.decode("utf-8", errors="replace")
     return str(content)
+
+
+def _extract_attachments(
+    message: EmailMessage,
+    *,
+    max_attachment_count: int,
+    max_total_attachment_bytes: int,
+) -> tuple[
+    tuple[ParsedInboundAttachment, ...],
+    tuple[str, ...],
+]:
+    if max_attachment_count <= 0:
+        raise ValueError("max_attachment_count must be positive")
+    if max_total_attachment_bytes <= 0:
+        raise ValueError("max_total_attachment_bytes must be positive")
+    attachments: list[ParsedInboundAttachment] = []
+    errors: list[str] = []
+    total_bytes = 0
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        if str(part.get_content_disposition() or "").casefold() != "attachment":
+            continue
+        filename = str(part.get_filename() or "").strip()
+        if not filename:
+            errors.append("An attachment without a filename was ignored.")
+            continue
+        suffix = document_suffix(filename)
+        if suffix not in SUPPORTED_DOCUMENT_SUFFIXES:
+            errors.append(
+                f"{filename}: unsupported file type {suffix or '(none)'}."
+            )
+            continue
+        if len(attachments) >= max_attachment_count:
+            errors.append(
+                f"{filename}: more than {max_attachment_count} attachments."
+            )
+            continue
+        payload = part.get_payload(decode=True)
+        if not isinstance(payload, bytes) or not payload:
+            errors.append(f"{filename}: empty or unreadable attachment.")
+            continue
+        if total_bytes + len(payload) > max_total_attachment_bytes:
+            errors.append(
+                f"{filename}: attachments exceed the "
+                f"{max_total_attachment_bytes} byte total limit."
+            )
+            continue
+        total_bytes += len(payload)
+        attachments.append(
+            ParsedInboundAttachment(
+                filename=filename,
+                content_type=part.get_content_type(),
+                body=payload,
+                size_bytes=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+            )
+        )
+    return tuple(attachments), tuple(errors)
 
 
 class _TextExtractor(HTMLParser):

@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import time
 from decimal import Decimal
-from typing import Any, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import boto3
-from mypy_boto3_dynamodb.service_resource import (
-    DynamoDBServiceResource,
-    Table,
-)
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.service_resource import (
+        DynamoDBServiceResource,
+        Table,
+    )
 
 
 def _token_key(kind: str, token: str) -> str:

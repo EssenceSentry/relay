@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from knowledge_core.email_service import SesEmailService
 
 
@@ -48,12 +46,14 @@ def test_send_question_sets_reply_to_and_web_fallback() -> None:
     assert call["Content"]["Simple"]["Subject"]["Data"].startswith("[Blend360]")
     text = call["Content"]["Simple"]["Body"]["Text"]["Data"]
     html = call["Content"]["Simple"]["Body"]["Html"]["Data"]
-    assert "Reply directly to this email" in text
-    assert f"https://app.example.com/#answer={'a' * 48}" in text
+    assert "Reply directly with your answer" in text
+    assert "supported project documents" in text
+    assert "https://app.example.com/" in text
+    assert "#answer=" not in text
     assert "question_id=" not in text
-    assert "Answer in your browser" in html
+    assert "Connect your agent" in html
     assert "Blend360 Project Knowledge" in html
-    assert "Help complete the project record" in html
+    assert "Reply directly to this email" in html
 
 
 def test_send_follow_up_asks_only_for_missing_detail() -> None:
@@ -76,22 +76,24 @@ def test_send_follow_up_asks_only_for_missing_detail() -> None:
     html = call["Content"]["Simple"]["Body"]["Html"]["Data"]
     assert "Which migration stages did Priya own?" in text
     assert "You do not need to repeat your previous answer" in text
-    assert "Continue your answer" in html
+    assert "Reply directly with only the missing detail" in html
+    assert "private answer link" not in html
     assert call["ReplyToAddresses"][0].startswith("kg-")
 
 
-def test_browser_fallback_requires_a_tokenized_reply_address() -> None:
+def test_email_delivery_does_not_require_a_browser_answer_token() -> None:
+    client = FakeSesV2Client()
     service = SesEmailService(
         region_name="us-east-1",
         from_address="questions@answers.example.com",
         application_base_url="https://app.example.com",
-        client=FakeSesV2Client(),
+        client=client,
     )
     question = _question()
     question["reply_address"] = "questions@answers.example.com"
 
-    with pytest.raises(
-        ValueError,
-        match="reply address does not contain an answer token",
-    ):
-        service.send_question(question)
+    service.send_question(question)
+
+    text = client.calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "#answer=" not in text
+    assert "https://app.example.com/" in text

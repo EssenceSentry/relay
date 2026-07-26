@@ -2,31 +2,95 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from knowledge_core.models import SearchHit, SearchResponse
+from app.application import UploadSession
+from knowledge_core.models import (
+    GlobalSearchResponse,
+    SearchHit,
+    SearchResponse,
+)
 
 _PREVIEW_CHARACTERS = 1_600
 
 
-class McpProject(BaseModel):
+class McpModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class McpCurrentUser(McpModel):
+    subject: str
+    email: str
+    groups: list[str]
+    is_admin: bool
+    profile: dict[str, Any] | None = None
+
+
+class McpProject(McpModel):
     project_id: str
     name: str
     description: str | None = None
+    status: str = "ACTIVE"
+    my_role: str
+    can_edit: bool
+    can_archive: bool
+    upload_page_url: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
 
-class McpDocumentSummary(BaseModel):
+class McpCollaborator(McpModel):
+    project_id: str
+    email: str
+    role: str
+    source: str
+    created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class McpCollaborationInvitation(McpModel):
+    invitation_id: str
+    project_id: str
+    email: str
+    source: str
+    status: str
+    invited_by: str | None = None
+    decided_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class McpNotification(McpModel):
+    notification_id: str
+    email: str
+    kind: str
+    title: str
+    message: str
+    project_id: str | None = None
+    action_url: str | None = None
+    read_at: str | None = None
+    email_status: str | None = None
+    data: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class McpDocumentSummary(McpModel):
     project_id: str
     document_id: str
     document_name: str
     document_version: str
     status: str
     source_type: str
+    content_type: str | None = None
+    size_bytes: int | None = None
     markdown_available: bool
+    page_count: int | None = None
+    error: str | None = None
+    next_action: str
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -35,19 +99,68 @@ class McpDocumentSummary(BaseModel):
         cls,
         document: Mapping[str, Any],
     ) -> McpDocumentSummary:
+        status = str(document["status"])
+        if status == "READY":
+            next_action = "Search or read this document."
+        elif status == "FAILED":
+            next_action = "Report the ingestion failure to a project member."
+        else:
+            next_action = "Poll get_document until status is READY or FAILED."
         return cls.model_validate(
             {
                 **document,
                 "markdown_available": bool(document.get("enhanced_s3_key")),
+                "next_action": next_action,
             }
         )
 
 
-class McpSearchHit(BaseModel):
+class McpDocumentUpload(McpModel):
+    document: McpDocumentSummary
+    upload_method: Literal["POST"] = "POST"
+    upload_url: str
+    fields: dict[str, str]
+    expires_in_seconds: int
+    fallback_url: str
+    max_upload_bytes: int
+    supported_extensions: list[str]
+    upload_required: bool
+    next_action: str
+
+    @classmethod
+    def from_session(cls, session: UploadSession) -> McpDocumentUpload:
+        return cls(
+            document=McpDocumentSummary.from_record(session.document),
+            upload_url=session.upload_url,
+            fields=session.fields,
+            expires_in_seconds=session.expires_in_seconds,
+            fallback_url=session.fallback_url,
+            max_upload_bytes=session.max_upload_bytes,
+            supported_extensions=list(session.supported_extensions),
+            upload_required=session.upload_required,
+            next_action=(
+                (
+                    "If the client can upload a local file, POST it directly "
+                    "to upload_url with every returned field. Otherwise open "
+                    "fallback_url for the authenticated browser uploader. "
+                )
+                if session.upload_required
+                else (
+                    "Do not upload the file again: this idempotent request "
+                    "already reached ingestion. "
+                )
+            )
+            + (
+                "Poll get_document until status is READY or FAILED."
+            ),
+        )
+
+
+class McpSearchHit(McpModel):
+    project_id: str
     document_id: str
     document_name: str
     source_type: str | None = None
-    source_s3_key: str | None = None
     page_number: int | None = None
     page_count: int | None = None
     locator: str | None = None
@@ -63,10 +176,10 @@ class McpSearchHit(BaseModel):
     def from_hit(cls, hit: SearchHit) -> McpSearchHit:
         preview, truncated = _text_preview(hit.text)
         return cls(
+            project_id=hit.project_id,
             document_id=hit.document_id,
             document_name=hit.document_name,
             source_type=hit.source_type,
-            source_s3_key=hit.s3_key,
             page_number=hit.page_number,
             page_count=hit.page_count,
             locator=hit.locator,
@@ -80,17 +193,20 @@ class McpSearchHit(BaseModel):
         )
 
 
-class McpSearchResponse(BaseModel):
-    project_id: str
+class McpSearchResponse(McpModel):
+    project_id: str | None = None
     query: str
     hits: list[McpSearchHit]
     warnings: list[str]
     score_note: str
 
     @classmethod
-    def from_search(cls, response: SearchResponse) -> McpSearchResponse:
+    def from_search(
+        cls,
+        response: SearchResponse | GlobalSearchResponse,
+    ) -> McpSearchResponse:
         return cls(
-            project_id=response.project_id,
+            project_id=getattr(response, "project_id", None),
             query=response.query,
             hits=[McpSearchHit.from_hit(hit) for hit in response.hits],
             warnings=[_safe_warning(warning) for warning in response.warnings],
@@ -98,16 +214,13 @@ class McpSearchResponse(BaseModel):
         )
 
 
-class McpDocumentText(BaseModel):
+class McpDocumentText(McpModel):
     project_id: str
     document_id: str
     document_name: str
     document_version: str
     status: str
     source_type: str
-    source_s3_bucket: str
-    source_s3_key: str
-    enhanced_s3_key: str | None
     page_count: int | None
     text: str | None
     content_hash: str | None
@@ -142,9 +255,6 @@ class McpDocumentText(BaseModel):
             document_version=str(document.get("document_version", "1")),
             status=str(document["status"]),
             source_type=str(document.get("source_type", "UPLOADED")),
-            source_s3_bucket=str(document["s3_bucket"]),
-            source_s3_key=str(document["s3_key"]),
-            enhanced_s3_key=cast(str | None, document.get("enhanced_s3_key")),
             page_count=(
                 int(document["page_count"])
                 if document.get("page_count") is not None
@@ -155,18 +265,18 @@ class McpDocumentText(BaseModel):
         )
 
 
-class McpDocumentDownload(BaseModel):
+class McpDocumentDownload(McpModel):
     project_id: str
     document_id: str
     document_name: str
-    download_format: str
+    download_format: Literal["original", "markdown"]
     filename: str
     content_type: str
     url: str
     expires_in_seconds: int
 
 
-class McpVerifiedFact(BaseModel):
+class McpVerifiedFact(McpModel):
     project_id: str
     fact_id: str
     name: str
@@ -177,17 +287,52 @@ class McpVerifiedFact(BaseModel):
     updated_at: str | None = None
 
 
-class McpKnowledgeGap(BaseModel):
+class McpQuestion(McpModel):
     project_id: str
     project_name: str
     question_id: str
     question: str
     context: str | None = None
-    assigned_expert_email: str
+    assigned_expert_email: str | None = None
     priority: str
     status: str
     notification_status: str
     notification_error: str | None = None
+    review_rationale: str | None = None
+    latest_answer_id: str | None = None
+    created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class McpAnswerAttachment(McpModel):
+    attachment_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    status: str
+    document_id: str
+    error: str | None = None
+
+
+class McpAnswer(McpModel):
+    project_id: str
+    question_id: str
+    answer_id: str
+    answer: str
+    answered_by: str
+    answer_source: str
+    review_status: str
+    requires_human_review: bool
+    supporting_document_ids: list[str] = Field(default_factory=list[str])
+    attachments: list[McpAnswerAttachment] = Field(
+        default_factory=list[McpAnswerAttachment]
+    )
+    human_reviewed_by: str | None = None
+    human_review_note: str | None = None
+    review_rationale: str | None = None
+    missing_details: list[str] = Field(default_factory=list[str])
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -204,3 +349,10 @@ def _safe_warning(warning: str) -> str:
     if warning.startswith("Vector channel failed"):
         return "Vector retrieval is temporarily unavailable."
     return "One retrieval channel returned an unexpected warning."
+
+
+def optional_string(
+    record: Mapping[str, Any],
+    key: str,
+) -> str | None:
+    return cast(str | None, record.get(key))

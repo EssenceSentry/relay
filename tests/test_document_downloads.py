@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from app.auth import Principal
 from app.document_downloads import (
     DocumentDownloadUnavailable,
     presign_document_download,
@@ -54,6 +55,23 @@ class FakeRepository:
         ):
             return self.document
         return None
+
+    def get_project(self, project_id: str) -> dict[str, str] | None:
+        if project_id != self.document["project_id"]:
+            return None
+        return {
+            "project_id": project_id,
+            "name": "Project one",
+            "status": "ACTIVE",
+        }
+
+
+_PRINCIPAL = Principal(
+    subject="user-1",
+    email="reader@blend360.com",
+    groups=frozenset(),
+    claims={},
+)
 
 
 @pytest.fixture
@@ -138,7 +156,7 @@ def test_api_download_route_supports_both_representations(
     app.include_router(
         build_api_router(
             container,  # pyright: ignore[reportArgumentType]
-            lambda: None,
+            lambda: _PRINCIPAL,
         )
     )
     client = make_test_client(app)
@@ -169,7 +187,7 @@ def test_api_returns_conflict_when_markdown_is_not_ready(
     app.include_router(
         build_api_router(
             container,  # pyright: ignore[reportArgumentType]
-            lambda: None,
+            lambda: _PRINCIPAL,
         )
     )
 

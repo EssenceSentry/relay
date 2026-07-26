@@ -10,6 +10,7 @@ from jwt import PyJWKClient
 from pydantic import TypeAdapter, ValidationError
 
 from app.services import ServiceContainer
+from knowledge_core.identity import email_name_tokens, normalize_email
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,12 +62,28 @@ class CognitoVerifier:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Use the Cognito ID token for this API",
             )
-        email = str(claims.get("email") or "").strip().casefold()
-        if not email:
+        raw_email = str(claims.get("email") or "")
+        if not raw_email:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="The authenticated user has no email claim",
             )
+        email_verified = claims.get("email_verified")
+        if not (
+            email_verified is True
+            or str(email_verified).strip().casefold() == "true"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="The authenticated email has not been verified",
+            )
+        try:
+            email = normalize_email(raw_email)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only verified @blend360.com accounts may sign in",
+            ) from exc
         raw_groups: object = claims.get("cognito:groups") or []
         groups: frozenset[str]
         try:
@@ -88,29 +105,14 @@ class CognitoVerifier:
 
 _bearer = HTTPBearer(auto_error=False)
 _STRING_LIST_ADAPTER = TypeAdapter(list[str])
-_PUBLIC_PRINCIPAL = Principal(
-    subject="public-hackathon-user",
-    email="public@hackathon.local",
-    groups=frozenset(),
-    claims={"authentication_mode": "public"},
-)
-
-
 def make_principal_dependency(
     container: ServiceContainer,
 ):
     if not container.settings.mcp_auth_enabled:
-
-        def public_principal(
-            credentials: Annotated[
-                HTTPAuthorizationCredentials | None,
-                Depends(_bearer),
-            ],
-        ) -> Principal:
-            del credentials
-            return _PUBLIC_PRINCIPAL
-
-        return public_principal
+        raise RuntimeError(
+            "Authentication is required; unauthenticated public mode was "
+            "removed in API/MCP contract v1"
+        )
 
     verifier = CognitoVerifier(
         region=container.settings.aws_region,
@@ -129,6 +131,39 @@ def make_principal_dependency(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing bearer token",
             )
-        return verifier.verify(credentials.credentials)
+        principal = verifier.verify(credentials.credentials)
+        existing = container.repository.get_user_profile(principal.email)
+        display_name = str(principal.claims.get("name") or "").strip()
+        if not display_name:
+            display_name = " ".join(
+                token.title() for token in email_name_tokens(principal.email)
+            )
+        identity_source = (
+            "MICROSOFT_SSO"
+            if str(
+                principal.claims.get("cognito:username") or ""
+            ).startswith("Microsoft_")
+            or bool(principal.claims.get("identities"))
+            else str(
+                (existing or {}).get("identity_source") or "COGNITO"
+            )
+        )
+        if existing is None or any(
+            (
+                str(existing.get("subject") or "") != principal.subject,
+                str(existing.get("display_name") or "") != display_name,
+                str(existing.get("identity_source") or "") != identity_source,
+            )
+        ):
+            container.repository.put_user_profile(
+                subject=principal.subject,
+                email=principal.email,
+                display_name=display_name,
+                identity_source=identity_source,
+                email_verified=True,
+            )
+        if existing is None:
+            container.matching.user_verified(principal.email)
+        return principal
 
     return current_principal

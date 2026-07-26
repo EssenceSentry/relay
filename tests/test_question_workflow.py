@@ -16,7 +16,7 @@ class FakeRepository:
             "project_name": "Project one",
             "question_id": "gap_1",
             "question": "Who owned the rollout?",
-            "assigned_expert_email": "expert@example.com",
+            "assigned_expert_email": "expert@blend360.com",
             "reply_address": "kg-validtokenvalue12345@example.com",
         }
 
@@ -45,10 +45,16 @@ class FailingSender:
         raise RuntimeError("recipient is not verified")
 
 
+class ExplodingSender:
+    def send_question(self, question: dict[str, Any]) -> EmailSendResult:
+        del question
+        raise AssertionError("An untargeted question must not send direct email")
+
+
 def _gap() -> KnowledgeGapCreate:
     return KnowledgeGapCreate(
         question="Who owned the rollout?",
-        assigned_expert_email="expert@example.com",
+        assigned_expert_email="expert@blend360.com",
     )
 
 
@@ -114,3 +120,25 @@ def test_create_question_passes_stable_question_id() -> None:
 
     assert repository.create_kwargs is not None
     assert repository.create_kwargs["question_id"] == "gap_stable"
+
+
+def test_untargeted_question_disables_direct_email_delivery() -> None:
+    repository = FakeRepository()
+    workflow = QuestionWorkflow(
+        repository=repository,  # type: ignore[arg-type]
+        email_sender=ExplodingSender(),  # type: ignore[arg-type]
+        reply_domain="example.com",
+    )
+
+    workflow.create_question(
+        project_id="prj_1",
+        gap=KnowledgeGapCreate(question="Who owned the rollout?"),
+        created_by="asker@blend360.com",
+    )
+
+    assert repository.create_kwargs is not None
+    assert repository.create_kwargs["reply_domain"] is None
+    assert (
+        repository.create_kwargs["notification_status"]
+        == NotificationStatus.DISABLED
+    )

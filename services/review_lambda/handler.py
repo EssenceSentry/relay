@@ -7,6 +7,7 @@ from typing import Any
 import boto3
 
 from knowledge_core.answer_history import format_answer_history
+from knowledge_core.answer_review_material import build_answer_review_material
 from knowledge_core.dynamo import (
     KnowledgeRepository,
     deserialize_stream_image,
@@ -15,6 +16,7 @@ from knowledge_core.email_service import SesEmailService
 from knowledge_core.indexed_documents import build_indexed_document
 from knowledge_core.indexing import DocumentIndexer
 from knowledge_core.models import (
+    AnswerReview,
     AnswerStatus,
     NotificationStatus,
     VerifiedFactCreate,
@@ -40,8 +42,6 @@ _SEARCH = OpenSearchServerlessClient(
     index_name=_SETTINGS.opensearch_index,
     dimensions=_SETTINGS.embedding_dimensions,
 )
-
-
 def _email_sender() -> SesEmailService | None:
     if not _SETTINGS.email_enabled:
         return None
@@ -114,12 +114,32 @@ def _process_record(record: dict[str, Any], *, attempt_id: str) -> None:
             answers,
             current_answer_id=answer_id,
         )
-        review = service.review_expert_answer(
-            project_name=item["project_name"],
-            question=item["question"],
-            answer=answer_history,
-            context=item.get("context"),
+        review_material, has_usable_material = build_answer_review_material(
+            answer_history=answer_history,
+            answers=answers,
+            repository=_REPOSITORY,
+            search=_SEARCH,
         )
+        if has_usable_material:
+            review = service.review_expert_answer(
+                project_name=item["project_name"],
+                question=item["question"],
+                answer=review_material,
+                context=item.get("context"),
+            )
+        else:
+            review = AnswerReview(
+                sufficient=False,
+                confidence=1.0,
+                rationale=(
+                    "The reply contained no usable text and none of its "
+                    "supporting documents could be extracted."
+                ),
+                missing_details=[
+                    "Reply with the missing detail or attach a supported, "
+                    "readable project document."
+                ],
+            )
 
         generated_document_id: str | None = None
         if review.sufficient:

@@ -100,6 +100,10 @@ _RUNTIME_ASSET_EXCLUDES = [
     ".venv/**",
     "cdk.out",
     "cdk.out/**",
+    "data",
+    "data/**",
+    "output",
+    "output/**",
     "PIH - Dataset",
     "PIH - Dataset/**",
     "tests",
@@ -143,6 +147,23 @@ def _public_base_url(raw_value: object | None) -> str:
     return f"{value}/"
 
 
+def _optional_iam_principal_arn(
+    name: str,
+    raw_value: object | None,
+) -> str | None:
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    if not re.fullmatch(
+        r"arn:(?:aws|aws-us-gov|aws-cn):iam::\d{12}:(?:role|user)/\S+",
+        value,
+    ):
+        raise ValueError(f"{name} must be an IAM role or user ARN")
+    return value
+
+
 class KnowledgeStack(Stack):
     def __init__(
         self,
@@ -170,6 +191,39 @@ class KnowledgeStack(Stack):
             self.node.try_get_context("document_processing_model")
             or "gpt-5.4-mini"
         )
+        matching_model = str(
+            self.node.try_get_context("matching_model") or "gpt-5.6-luna"
+        )
+        matching_threshold = float(
+            self.node.try_get_context("matching_threshold") or 0.95
+        )
+        if not 0.0 <= matching_threshold <= 1.0:
+            raise ValueError("matching_threshold must be between 0 and 1")
+        name_invitations_enabled = _context_flag(
+            "name_invitations_enabled",
+            self.node.try_get_context("name_invitations_enabled"),
+        )
+        initial_admin_emails = sorted(
+            {
+                email.strip().casefold()
+                for email in str(
+                    self.node.try_get_context("initial_admin_emails")
+                    or "agustin.sellanes@blend360.com"
+                ).split(",")
+                if email.strip()
+            }
+        )
+        if not initial_admin_emails or any(
+            re.fullmatch(
+                r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@blend360\.com",
+                email,
+            )
+            is None
+            for email in initial_admin_emails
+        ):
+            raise ValueError(
+                "initial_admin_emails must contain valid @blend360.com emails"
+            )
         public_base_url = _public_base_url(
             self.node.try_get_context("mcp_public_base_url")
         )
@@ -179,9 +233,15 @@ class KnowledgeStack(Stack):
             if raw_mcp_auth_enabled is None
             else _context_flag("mcp_auth_enabled", raw_mcp_auth_enabled)
         )
-        max_upload_bytes = (
-            100 * 1024 * 1024 if mcp_auth_enabled else 25 * 1024 * 1024
+        if not mcp_auth_enabled:
+            raise ValueError(
+                "API/MCP contract v1 requires mcp_auth_enabled=true"
+            )
+        opensearch_admin_principal_arn = _optional_iam_principal_arn(
+            "opensearch_admin_principal_arn",
+            self.node.try_get_context("opensearch_admin_principal_arn"),
         )
+        max_upload_bytes = 100 * 1024 * 1024
         microsoft_sso_enabled = _context_flag(
             "microsoft_sso",
             self.node.try_get_context("microsoft_sso"),
@@ -195,6 +255,10 @@ class KnowledgeStack(Stack):
                 "microsoft_sso_secret_name is required when "
                 "microsoft_sso is true"
             )
+        cognito_use_ses_email = _context_flag(
+            "cognito_use_ses_email",
+            self.node.try_get_context("cognito_use_ses_email"),
+        )
 
         raw_email_domain = self.node.try_get_context("email_domain")
         email_domain = (
@@ -245,6 +309,15 @@ class KnowledgeStack(Stack):
         ):
             raise ValueError(
                 "email_sender_local_part must be a valid mailbox local part"
+            )
+        ses_from_address = (
+            f"{email_sender_local_part}@{email_domain}"
+            if email_domain is not None
+            else None
+        )
+        if cognito_use_ses_email and ses_from_address is None:
+            raise ValueError(
+                "cognito_use_ses_email requires email_domain"
             )
 
         document_bucket = s3.Bucket(
@@ -301,6 +374,38 @@ class KnowledgeStack(Stack):
             ),
             projection_type=dynamodb.ProjectionType.ALL,
         )
+        matching_dead_letter_queue = sqs.Queue(
+            self,
+            "MatchingDLQ",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            retention_period=Duration.days(14),
+        )
+        matching_queue = sqs.Queue(
+            self,
+            "MatchingQueue",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            visibility_timeout=Duration.minutes(6),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                queue=matching_dead_letter_queue,
+                max_receive_count=4,
+            ),
+        )
+        notification_dead_letter_queue = sqs.Queue(
+            self,
+            "NotificationDLQ",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            retention_period=Duration.days(14),
+        )
+        notification_queue = sqs.Queue(
+            self,
+            "NotificationQueue",
+            encryption=sqs.QueueEncryption.SQS_MANAGED,
+            visibility_timeout=Duration.minutes(3),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                queue=notification_dead_letter_queue,
+                max_receive_count=5,
+            ),
+        )
 
         openai_secret = secretsmanager.Secret(
             self,
@@ -317,10 +422,23 @@ class KnowledgeStack(Stack):
         user_pool = cognito.UserPool(
             self,
             "UserPool",
-            self_sign_up_enabled=False,
+            self_sign_up_enabled=True,
             sign_in_aliases=cognito.SignInAliases(email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            email=(
+                cognito.UserPoolEmail.with_ses(
+                    from_email=ses_from_address,
+                    from_name="Blend360 Relay",
+                    reply_to=ses_from_address,
+                    ses_region=self.region,
+                    ses_verified_domain=email_domain,
+                )
+                if cognito_use_ses_email
+                and ses_from_address is not None
+                and email_domain is not None
+                else cognito.UserPoolEmail.with_cognito()
+            ),
             password_policy=cognito.PasswordPolicy(
                 min_length=12,
                 require_digits=True,
@@ -336,7 +454,32 @@ class KnowledgeStack(Stack):
             "AdminGroup",
             user_pool=user_pool,
             group_name="admins",
-            description="Can answer any knowledge-gap question",
+            description="Global Relay administrators",
+        )
+        pre_signup_function = lambda_.Function(
+            self,
+            "BlendEmailPreSignUpFunction",
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            handler="index.handler",
+            code=lambda_.Code.from_inline(
+                """
+def handler(event, context):
+    del context
+    attributes = event.get("request", {}).get("userAttributes", {})
+    email = str(attributes.get("email") or "").strip().casefold()
+    local, separator, domain = email.rpartition("@")
+    if not separator or not local or domain != "blend360.com":
+        raise ValueError("Only @blend360.com employees may register")
+    return event
+""".strip()
+            ),
+            timeout=Duration.seconds(10),
+            memory_size=128,
+            log_retention=logs.RetentionDays.ONE_WEEK,
+        )
+        user_pool.add_trigger(
+            cognito.UserPoolOperation.PRE_SIGN_UP,
+            pre_signup_function,  # pyright: ignore[reportArgumentType]
         )
         domain_prefix = str(
             self.node.try_get_context("cognito_domain_prefix")
@@ -537,8 +680,7 @@ function handler(event) {
         email_identity = None
         inbound_email_bucket = None
         receipt_rule_set = None
-        ses_from_address = None
-        email_environment = {"EMAIL_ENABLED": "false"}
+        email_environment: dict[str, str] = {"EMAIL_ENABLED": "false"}
         email_resource_prefix = (
             re.sub(
                 r"[^a-z0-9-]+",
@@ -548,12 +690,12 @@ function handler(event) {
             or "blend-knowledge"
         )
         if email_domain is not None:
+            assert ses_from_address is not None
             hosted_zone = route53.PublicHostedZone.from_lookup(
                 self,
                 "EmailHostedZone",
                 domain_name=email_domain,
             )
-            ses_from_address = f"{email_sender_local_part}@{email_domain}"
             email_identity = ses.EmailIdentity(
                 self,
                 "EmailIdentity",
@@ -617,13 +759,20 @@ function handler(event) {
                     "TABLE_NAME": table.table_name,
                     "INBOUND_EMAIL_BUCKET": inbound_email_bucket.bucket_name,
                     "INBOUND_EMAIL_PREFIX": "inbound/",
+                    "DOCUMENT_BUCKET": document_bucket.bucket_name,
                     "SES_REPLY_DOMAIN": email_domain,
                     "MAX_EMAIL_ANSWER_CHARS": "20000",
+                    "MAX_EMAIL_ATTACHMENT_COUNT": "10",
+                    "MAX_EMAIL_ATTACHMENT_BYTES": str(25 * 1024 * 1024),
+                    "NOTIFICATION_QUEUE_URL": notification_queue.queue_url,
+                    "APPLICATION_BASE_URL": public_base_url,
                 },
                 log_retention=logs.RetentionDays.ONE_WEEK,
             )
-            inbound_email_bucket.grant_read(inbound_email_function)
+            inbound_email_bucket.grant_read_write(inbound_email_function)
+            document_bucket.grant_read_write(inbound_email_function)
             table.grant_read_write_data(inbound_email_function)
+            notification_queue.grant_send_messages(inbound_email_function)
 
             receipt_rule_set = ses.ReceiptRuleSet(
                 self,
@@ -685,6 +834,8 @@ function handler(event) {
                 "SES_REPLY_DOMAIN": email_domain,
                 "APPLICATION_BASE_URL": public_base_url,
             }
+            if cognito_use_ses_email:
+                user_pool.node.add_dependency(email_identity)
 
         collection_name = "blend-knowledge"
         group_name = "blend-knowledge-group"
@@ -813,6 +964,9 @@ function handler(event) {
                 **common_environment,
                 "DOCUMENT_PROCESSING_MODEL": document_processing_model,
                 "INGESTION_QUEUE_URL": ingestion_queue.queue_url,
+                "MATCHING_QUEUE_URL": matching_queue.queue_url,
+                "NOTIFICATION_QUEUE_URL": notification_queue.queue_url,
+                "APPLICATION_BASE_URL": public_base_url,
             },
             log_retention=logs.RetentionDays.ONE_WEEK,
         )
@@ -824,6 +978,110 @@ function handler(event) {
             )
         )
         ingestion_queue.grant_send_messages(ingestion_function)
+        matching_queue.grant_send_messages(ingestion_function)
+        notification_queue.grant_send_messages(ingestion_function)
+
+        identity_function = lambda_.DockerImageFunction(
+            self,
+            "IdentityFunction",
+            code=lambda_.DockerImageCode.from_image_asset(
+                directory=str(_ROOT),
+                file="services/identity_lambda/Dockerfile",
+                platform=ecr_assets.Platform.LINUX_AMD64,
+                exclude=_RUNTIME_ASSET_EXCLUDES,
+            ),
+            architecture=lambda_.Architecture.X86_64,
+            timeout=Duration.minutes(1),
+            memory_size=512,
+            reserved_concurrent_executions=2,
+            environment={
+                "TABLE_NAME": table.table_name,
+                "MATCHING_QUEUE_URL": matching_queue.queue_url,
+                "INITIAL_ADMIN_EMAILS": ",".join(initial_admin_emails),
+            },
+            log_retention=logs.RetentionDays.ONE_WEEK,
+        )
+        user_pool.add_trigger(
+            cognito.UserPoolOperation.POST_CONFIRMATION,
+            identity_function,  # pyright: ignore[reportArgumentType]
+        )
+        table.grant_read_write_data(identity_function)
+        matching_queue.grant_send_messages(identity_function)
+        identity_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["cognito-idp:AdminAddUserToGroup"],
+                resources=[
+                    (
+                        f"arn:{self.partition}:cognito-idp:{self.region}:"
+                        f"{self.account}:userpool/*"
+                    )
+                ],
+            )
+        )
+
+        matching_function = lambda_.DockerImageFunction(
+            self,
+            "MatchingFunction",
+            code=lambda_.DockerImageCode.from_image_asset(
+                directory=str(_ROOT),
+                file="services/matching_lambda/Dockerfile",
+                platform=ecr_assets.Platform.LINUX_AMD64,
+                exclude=_RUNTIME_ASSET_EXCLUDES,
+            ),
+            architecture=lambda_.Architecture.X86_64,
+            timeout=Duration.minutes(5),
+            memory_size=1024,
+            reserved_concurrent_executions=2,
+            environment={
+                **common_environment,
+                "MATCHING_MODEL": matching_model,
+                "MATCHING_THRESHOLD": str(matching_threshold),
+                "NAME_INVITATIONS_ENABLED": str(
+                    name_invitations_enabled
+                ).lower(),
+                "NOTIFICATION_QUEUE_URL": notification_queue.queue_url,
+                "APPLICATION_BASE_URL": public_base_url,
+            },
+            log_retention=logs.RetentionDays.ONE_WEEK,
+        )
+        matching_function.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                matching_queue,
+                batch_size=5,
+                report_batch_item_failures=True,
+            )
+        )
+        table.grant_read_write_data(matching_function)
+        openai_secret.grant_read(matching_function)
+        notification_queue.grant_send_messages(matching_function)
+
+        notification_function = lambda_.DockerImageFunction(
+            self,
+            "NotificationFunction",
+            code=lambda_.DockerImageCode.from_image_asset(
+                directory=str(_ROOT),
+                file="services/notification_lambda/Dockerfile",
+                platform=ecr_assets.Platform.LINUX_AMD64,
+                exclude=_RUNTIME_ASSET_EXCLUDES,
+            ),
+            architecture=lambda_.Architecture.X86_64,
+            timeout=Duration.minutes(2),
+            memory_size=512,
+            reserved_concurrent_executions=2,
+            environment={
+                **email_environment,
+                "TABLE_NAME": table.table_name,
+            },
+            log_retention=logs.RetentionDays.ONE_WEEK,
+        )
+        notification_function.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                notification_queue,
+                batch_size=5,
+                report_batch_item_failures=True,
+            )
+        )
+        table.grant_read_write_data(notification_function)
 
         review_function = lambda_.DockerImageFunction(
             self,
@@ -886,6 +1144,8 @@ function handler(event) {
             "ApiTaskRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),  # pyright: ignore[reportArgumentType]
         )
+        if inbound_email_bucket is not None:
+            inbound_email_bucket.grant_read(task_role)
         task_definition = ecs.FargateTaskDefinition(
             self,
             "ApiTaskDefinition",
@@ -927,6 +1187,8 @@ function handler(event) {
                 "MCP_COGNITO_DOMAIN": user_pool_domain.base_url(),
                 "MCP_PUBLIC_BASE_URL": public_base_url.rstrip("/"),
                 "MAX_UPLOAD_BYTES": str(max_upload_bytes),
+                "MATCHING_QUEUE_URL": matching_queue.queue_url,
+                "NOTIFICATION_QUEUE_URL": notification_queue.queue_url,
             },
             health_check=ecs.HealthCheck(
                 command=[
@@ -998,45 +1260,67 @@ function handler(event) {
         document_bucket.grant_read_write(task_role)
         table.grant_read_write_data(task_role)
         openai_secret.grant_read(task_role)
+        matching_queue.grant_send_messages(task_role)
+        notification_queue.grant_send_messages(task_role)
         if email_identity is not None:
             email_identity.grant_send_email(task_role)
             email_identity.grant_send_email(review_function)
+            email_identity.grant_send_email(notification_function)
 
         ingestion_role = ingestion_function.role
         review_role = review_function.role
         if ingestion_role is None or review_role is None:
             raise RuntimeError("Lambda execution roles were not created")
 
-        principals = [
+        application_principals = [
             task_role.role_arn,
             ingestion_role.role_arn,
             review_role.role_arn,
         ]
+        data_access_statements: list[dict[str, Any]] = [
+            {
+                "Description": "Application access to the knowledge index",
+                "Principal": application_principals,
+                "Rules": [
+                    {
+                        "ResourceType": "collection",
+                        "Resource": [f"collection/{collection_name}"],
+                        "Permission": ["aoss:*"],
+                    },
+                    {
+                        "ResourceType": "index",
+                        "Resource": [f"index/{collection_name}/*"],
+                        "Permission": ["aoss:*"],
+                    },
+                ],
+            }
+        ]
+        if opensearch_admin_principal_arn is not None:
+            data_access_statements.append(
+                {
+                    "Description": (
+                        "Document migration access for a maintenance identity"
+                    ),
+                    "Principal": [opensearch_admin_principal_arn],
+                    "Rules": [
+                        {
+                            "ResourceType": "index",
+                            "Resource": [f"index/{collection_name}/*"],
+                            "Permission": [
+                                "aoss:DescribeIndex",
+                                "aoss:ReadDocument",
+                                "aoss:WriteDocument",
+                            ],
+                        }
+                    ],
+                }
+            )
         data_access_policy = aoss.CfnAccessPolicy(
             self,
             "OpenSearchDataAccessPolicy",
             name="blend-knowledge-access",
             type="data",
-            policy=self.to_json_string(
-                [
-                    {
-                        "Description": "Application access to the knowledge index",
-                        "Principal": principals,
-                        "Rules": [
-                            {
-                                "ResourceType": "collection",
-                                "Resource": [f"collection/{collection_name}"],
-                                "Permission": ["aoss:*"],
-                            },
-                            {
-                                "ResourceType": "index",
-                                "Resource": [f"index/{collection_name}/*"],
-                                "Permission": ["aoss:*"],
-                            },
-                        ],
-                    }
-                ]
-            ),
+            policy=self.to_json_string(data_access_statements),
         )
         data_access_policy.apply_removal_policy(removal_policy)
         data_access_policy.add_dependency(collection)
@@ -1080,7 +1364,7 @@ function handler(event) {
             protocol_type="HTTP",
             cors_configuration=apigwv2.CfnApi.CorsProperty(
                 allow_origins=[public_base_url.rstrip("/")],
-                allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+                allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
                 allow_headers=["*"],
                 expose_headers=["Mcp-Session-Id"],
                 max_age=3600,
@@ -1236,6 +1520,16 @@ function handler(event) {
             self,
             "KnowledgeTableName",
             value=table.table_name,
+        )
+        CfnOutput(
+            self,
+            "MatchingQueueUrl",
+            value=matching_queue.queue_url,
+        )
+        CfnOutput(
+            self,
+            "NotificationQueueUrl",
+            value=notification_queue.queue_url,
         )
         CfnOutput(
             self,

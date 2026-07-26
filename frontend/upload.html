@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Upload project documents · Blend Project Knowledge</title>
+    <link rel="icon" type="image/png" href="assets/icon-mark.png" />
+    <link rel="apple-touch-icon" href="assets/icon-mark.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-page="upload">
+    <div class="background" aria-hidden="true">
+      <div class="ambient ambient-one"></div>
+      <div class="ambient ambient-two"></div>
+      <img
+        src="assets/knowledge-portal.png"
+        alt=""
+        class="background-art art-one"
+      />
+      <img
+        src="assets/knowledge-orbit.png"
+        alt=""
+        class="background-art art-two"
+      />
+    </div>
+
+    <main class="shell upload-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Blend Project Knowledge home">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="assets/icon-mark.png" alt="" />
+          </span>
+          <span>
+            <strong>Project Knowledge</strong>
+            <small>Secure source upload</small>
+          </span>
+        </a>
+        <div class="topbar-actions">
+          <a class="button button-glass button-small" href="/">
+            MCP connection
+          </a>
+          <div id="user-area" class="user-area hidden">
+            <span id="user-email" class="user-email"></span>
+            <button
+              id="logout-button"
+              class="button button-quiet button-small"
+              type="button"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section id="loading-view" class="center-card panel">
+        <div class="spinner" aria-hidden="true"></div>
+        <h1>Preparing your upload</h1>
+        <p>Checking the project link and your Blend session.</p>
+      </section>
+
+      <section id="upload-view" class="upload-page hidden">
+        <header class="upload-page-heading">
+          <p class="eyebrow">Project source intake</p>
+          <h1>Upload the evidence. Your agent handles the rest.</h1>
+          <p>
+            This secure link fixes the destination project. Files upload
+            directly to private storage and enter ingestion automatically.
+          </p>
+        </header>
+
+        <section id="upload-auth-gate" class="upload-auth-gate panel">
+          <p class="eyebrow">Blend authentication required</p>
+          <h2>Sign in to use this project upload link.</h2>
+          <p>
+            Only verified <strong>@blend360.com</strong> accounts can inspect
+            the project context or send files.
+          </p>
+          <button
+            id="login-button"
+            class="button button-primary button-large"
+            type="button"
+          >
+            Sign in with Blend
+          </button>
+        </section>
+
+        <section id="upload-panel" class="upload-panel panel hidden">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Authenticated upload</p>
+              <h2>Add source material</h2>
+              <p>
+                This page accepts only the project encoded in the agent or
+                email link.
+              </p>
+            </div>
+            <span id="upload-limit" class="limit-badge"></span>
+          </div>
+
+          <div
+            id="upload-context-error"
+            class="empty-state upload-context-error hidden"
+          ></div>
+
+          <div
+            id="upload-project-context"
+            class="project-context hidden"
+            aria-live="polite"
+          >
+            <span>Project</span>
+            <strong id="upload-project-name"></strong>
+            <small id="upload-project-role"></small>
+          </div>
+
+          <div id="upload-controls" class="hidden">
+            <label id="drop-zone" class="drop-zone" for="file-input">
+              <input id="file-input" type="file" multiple />
+              <span class="upload-icon" aria-hidden="true">↑</span>
+              <strong>Drop project files here</strong>
+              <span>or choose one or more supported documents</span>
+              <small>PDF, DOC, DOCX, PPTX, TXT, MD, CSV, or JSON</small>
+            </label>
+          </div>
+
+          <div id="upload-list" class="upload-list" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -5,7 +5,7 @@ import json
 import random
 import time
 from collections.abc import Iterable, Mapping
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeGuard, cast
 from urllib.parse import quote, urljoin
 
 import boto3
@@ -15,6 +15,28 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 _RETRYABLE_STATUS = {403, 404, 408, 409, 429, 500, 502, 503, 504}
+
+
+def _is_string_mapping(value: object) -> TypeGuard[dict[str, Any]]:
+    return isinstance(value, dict)
+
+
+def _is_mapping_list(value: object) -> TypeGuard[list[dict[str, Any]]]:
+    if not isinstance(value, list):
+        return False
+    items = cast(list[object], value)
+    return all(isinstance(item, dict) for item in items)
+
+
+def _is_search_after(
+    value: object,
+) -> TypeGuard[list[str | int | float]]:
+    if not isinstance(value, list):
+        return False
+    items = cast(list[object], value)
+    return bool(items) and all(
+        isinstance(item, str | int | float) for item in items
+    )
 
 
 class CredentialSession(Protocol):
@@ -341,6 +363,56 @@ class OpenSearchServerlessClient:
             size=1,
         )
         return documents[0] if documents else None
+
+    def get_project_documents(
+        self,
+        *,
+        project_id: str,
+        include_embedding: bool = False,
+        page_size: int = 500,
+    ) -> list[dict[str, Any]]:
+        if page_size <= 0 or page_size > 1000:
+            raise ValueError("page_size must be between 1 and 1000")
+        path = f"{quote(self._index_name, safe='')}/_search"
+        search_after: list[str | int | float] | None = None
+        documents: list[dict[str, Any]] = []
+        while True:
+            body: dict[str, Any] = {
+                "size": page_size,
+                "query": {"term": {"project_id": project_id}},
+                "sort": [{"index_id": {"order": "asc"}}],
+            }
+            if include_embedding:
+                body["_source"] = {"includes": ["*"]}
+            else:
+                body["_source"] = {"excludes": ["embedding"]}
+            if search_after is not None:
+                body["search_after"] = search_after
+            response = self.request("POST", path, json_body=body)
+            payload = _safe_json(response)
+            raw_hit_group = payload.get("hits")
+            if not _is_string_mapping(raw_hit_group):
+                raise RuntimeError("OpenSearch returned invalid search hits")
+            raw_hits = raw_hit_group.get("hits")
+            if not _is_mapping_list(raw_hits):
+                raise RuntimeError("OpenSearch returned invalid search hits")
+            for raw_hit in raw_hits:
+                raw_source = raw_hit.get("_source")
+                if not _is_string_mapping(raw_source):
+                    raise RuntimeError("OpenSearch returned an invalid hit")
+                source = dict(raw_source)
+                source["_id"] = raw_hit.get("_id")
+                documents.append(source)
+            if len(raw_hits) < page_size:
+                break
+            last_hit = raw_hits[-1]
+            raw_sort = last_hit.get("sort")
+            if not _is_search_after(raw_sort):
+                raise RuntimeError(
+                    "OpenSearch pagination response has no sort value"
+                )
+            search_after = raw_sort
+        return documents
 
     def delete_document(self, *, project_id: str, document_id: str) -> None:
         # OpenSearch Serverless does not support _delete_by_query. Resolve the
