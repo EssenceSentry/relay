@@ -17,7 +17,9 @@ if [[ -f "$ROOT/.env" ]]; then
       AWS_PROFILE | AWS_REGION | AWS_DEFAULT_REGION | EMAIL_DOMAIN | \
         EMAIL_SENDER_LOCAL_PART | MICROSOFT_SSO | \
         MICROSOFT_SSO_SECRET_NAME | MCP_AUTH_ENABLED | PUBLIC_DOMAIN | \
-        MCP_PUBLIC_BASE_URL)
+        MCP_PUBLIC_BASE_URL | OPENSEARCH_ADMIN_PRINCIPAL_ARN | \
+        INITIAL_ADMIN_EMAILS | NAME_INVITATIONS_ENABLED | \
+        COGNITO_USE_SES_EMAIL)
         if [[ -z "${!key:-}" ]]; then
           printf -v "$key" "%s" "$value"
           export "$key"
@@ -35,8 +37,27 @@ command -v npx >/dev/null || {
   echo "Node.js/npx is required for the AWS CDK CLI." >&2
   exit 1
 }
+command -v aws >/dev/null || {
+  echo "The AWS CLI is required to resolve the deployment account." >&2
+  exit 1
+}
+
+DEPLOY_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+export CDK_DEFAULT_REGION="${CDK_DEFAULT_REGION:-$DEPLOY_REGION}"
+if [[ -z "${CDK_DEFAULT_ACCOUNT:-}" ]]; then
+  CDK_DEFAULT_ACCOUNT="$(
+    aws sts get-caller-identity --query Account --output text
+  )"
+  export CDK_DEFAULT_ACCOUNT
+fi
 
 CDK_CONTEXT=()
+CDK_ASSEMBLY_DIR="$(mktemp -d /tmp/relay-cdk.XXXXXX)"
+cleanup_assembly() {
+  rm -rf "$CDK_ASSEMBLY_DIR"
+}
+trap cleanup_assembly EXIT
+
 if [[ -n "${EMAIL_DOMAIN:-}" ]]; then
   CDK_CONTEXT+=("-c" "email_domain=${EMAIL_DOMAIN}")
 fi
@@ -45,6 +66,27 @@ if [[ -n "${EMAIL_SENDER_LOCAL_PART:-}" ]]; then
 fi
 if [[ -n "${MCP_AUTH_ENABLED:-}" ]]; then
   CDK_CONTEXT+=("-c" "mcp_auth_enabled=${MCP_AUTH_ENABLED}")
+fi
+if [[ -n "${INITIAL_ADMIN_EMAILS:-}" ]]; then
+  CDK_CONTEXT+=("-c" "initial_admin_emails=${INITIAL_ADMIN_EMAILS}")
+fi
+if [[ -n "${NAME_INVITATIONS_ENABLED:-}" ]]; then
+  CDK_CONTEXT+=(
+    "-c"
+    "name_invitations_enabled=${NAME_INVITATIONS_ENABLED}"
+  )
+fi
+if [[ -n "${COGNITO_USE_SES_EMAIL:-}" ]]; then
+  CDK_CONTEXT+=(
+    "-c"
+    "cognito_use_ses_email=${COGNITO_USE_SES_EMAIL}"
+  )
+fi
+if [[ -n "${OPENSEARCH_ADMIN_PRINCIPAL_ARN:-}" ]]; then
+  CDK_CONTEXT+=(
+    "-c"
+    "opensearch_admin_principal_arn=${OPENSEARCH_ADMIN_PRINCIPAL_ARN}"
+  )
 fi
 if [[ -n "${PUBLIC_DOMAIN:-}" ]]; then
   CDK_CONTEXT+=("-c" "public_domain=${PUBLIC_DOMAIN}")
@@ -58,7 +100,13 @@ if [[ "${MICROSOFT_SSO:-0}" == "1" ]]; then
 fi
 
 uv sync --all-groups
-npx --yes aws-cdk@latest bootstrap
+uv run python scripts/build_plugin_bundle.py
+if ! aws cloudformation describe-stacks \
+  --stack-name CDKToolkit \
+  --region "$CDK_DEFAULT_REGION" >/dev/null 2>&1; then
+  npx --yes aws-cdk@latest bootstrap \
+    "aws://${CDK_DEFAULT_ACCOUNT}/${CDK_DEFAULT_REGION}"
+fi
 
 PUBLIC_BASE_URL="${MCP_PUBLIC_BASE_URL:-}"
 if [[ -z "$PUBLIC_BASE_URL" && -n "${PUBLIC_DOMAIN:-}" ]]; then
@@ -74,6 +122,7 @@ deploy_stack() {
   local deploy_args=(
     "--require-approval" "never"
     "--outputs-file" "cdk-outputs.json"
+    "--output" "$CDK_ASSEMBLY_DIR"
   )
   if [[ ${#CDK_CONTEXT[@]} -gt 0 ]]; then
     deploy_args+=("${CDK_CONTEXT[@]}")
@@ -95,10 +144,10 @@ fi
 echo
 echo "Deployment complete. Next steps:"
 echo "  OPENAI_API_KEY=... ./scripts/configure_openai.sh"
-echo "  PASSWORD='...' uv run python scripts/create_user.py you@example.com --admin"
+echo "  PASSWORD='...' uv run python scripts/create_user.py you@blend360.com --admin"
 echo "  uv run python scripts/configure_sso.py microsoft --tenant-id ... --client-id ..."
 if [[ -n "${EMAIL_DOMAIN:-}" ]]; then
   echo "  python scripts/email_setup_status.py"
-  echo "  python scripts/verify_ses_recipients.py expert@example.com"
+  echo "  python scripts/verify_ses_recipients.py expert@blend360.com"
 fi
 echo "  ./scripts/show_mcp_connection.sh"

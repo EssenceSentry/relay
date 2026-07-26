@@ -3,58 +3,70 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import HTTPException
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import Field, TypeAdapter, ValidationError
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse
 
-from app.document_downloads import (
-    DocumentDownloadUnavailable,
-    presign_document_download,
-)
+from app.application import ApplicationError, KnowledgeApplication
+from app.auth import Principal
 from app.mcp_models import (
+    McpAnswer,
+    McpCollaborationInvitation,
+    McpCollaborator,
+    McpCurrentUser,
     McpDocumentDownload,
     McpDocumentSummary,
     McpDocumentText,
-    McpKnowledgeGap,
+    McpDocumentUpload,
+    McpNotification,
     McpProject,
+    McpQuestion,
     McpSearchResponse,
     McpVerifiedFact,
 )
 from app.mcp_oauth import MCP_SCOPE, CognitoMcpOAuthProvider
 from app.services import ServiceContainer
 from knowledge_core.ids import stable_action_id
-from knowledge_core.models import KnowledgeGapCreate, VerifiedFactCreate
+from knowledge_core.models import (
+    AnswerSubmit,
+    CollaboratorInviteCreate,
+    HumanAnswerReviewRequest,
+    InvitationDecisionRequest,
+    KnowledgeGapCreate,
+    ProjectCreate,
+    ProjectRename,
+    SearchRequest,
+    UploadRequest,
+    VerifiedFactCreate,
+)
 
 MCP_PUBLIC_PATH = "/mcp/"
 
 ProjectId = Annotated[
     str,
-    Field(min_length=1, max_length=128, description="Project identifier"),
+    Field(min_length=1, max_length=128, description="Exact project identifier"),
 ]
 DocumentId = Annotated[
     str,
-    Field(min_length=1, max_length=128, description="Document identifier"),
-]
-DocumentDownloadFormat = Annotated[
-    Literal["original", "markdown"],
-    Field(
-        description=(
-            "Representation to download: original for the uploaded source file "
-            "or markdown for the consolidated enhanced Markdown."
-        )
-    ),
+    Field(min_length=1, max_length=128, description="Exact document identifier"),
 ]
 QuestionId = Annotated[
     str,
-    Field(min_length=1, max_length=128, description="Knowledge-gap identifier"),
+    Field(min_length=1, max_length=128, description="Exact question identifier"),
+]
+AnswerId = Annotated[
+    str,
+    Field(min_length=1, max_length=128, description="Exact answer identifier"),
 ]
 RequestId = Annotated[
     str,
@@ -78,32 +90,33 @@ TopK = Annotated[
         ge=1,
         le=25,
         description=(
-            "Number of ranked results to return. Use 5 for focused lookup "
-            "or 10-20 for broader dossier research."
+            "Number of ranked results. Use 5 for focused lookup or 10-20 for "
+            "broad dossier research."
         ),
     ),
 ]
+ProjectName = Annotated[str, Field(min_length=2, max_length=200)]
+ProjectDescription = Annotated[str | None, Field(max_length=2_000)]
+Email = Annotated[str, Field(min_length=3, max_length=320)]
+NotificationId = Annotated[str, Field(min_length=1, max_length=160)]
+InvitationId = Annotated[str, Field(min_length=1, max_length=160)]
+Filename = Annotated[str, Field(min_length=1, max_length=240)]
+ContentType = Annotated[str, Field(min_length=1, max_length=120)]
+FileSize = Annotated[int, Field(gt=0, le=100 * 1024 * 1024)]
 QuestionText = Annotated[str, Field(min_length=5, max_length=4_000)]
-ExpertEmail = Annotated[str, Field(min_length=3, max_length=320)]
-GapContext = Annotated[str | None, Field(max_length=8_000)]
+AnswerText = Annotated[str, Field(max_length=20_000)]
+SupportingDocumentIds = Annotated[
+    list[str],
+    Field(max_length=10),
+]
+QuestionContext = Annotated[str | None, Field(max_length=8_000)]
+ReviewNote = Annotated[str | None, Field(max_length=2_000)]
 FactName = Annotated[str, Field(min_length=2, max_length=300)]
 FactValue = Annotated[str, Field(min_length=1, max_length=8_000)]
 FactProvenance = Annotated[str, Field(min_length=2, max_length=2_000)]
-BriefProjectName = Annotated[
-    str,
-    Field(
-        min_length=2,
-        max_length=300,
-        description="Project or case-study name to show in the sales brief",
-    ),
-]
-BriefContext = Annotated[
-    str | None,
-    Field(
-        max_length=4_000,
-        description="Optional audience, opportunity, or emphasis from the user",
-    ),
-]
+BriefProjectName = Annotated[str, Field(min_length=2, max_length=300)]
+BriefContext = Annotated[str | None, Field(max_length=4_000)]
+DownloadFormat = Annotated[Literal["original", "markdown"], Field()]
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -111,37 +124,39 @@ _READ_ONLY = ToolAnnotations(
     idempotentHint=True,
     openWorldHint=False,
 )
-_EMAIL_CREATE = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=True,
-    openWorldHint=True,
-)
-_EMAIL_RESEND = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=False,
-    openWorldHint=True,
-)
 _INTERNAL_WRITE = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
 )
+_EXTERNAL_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+_DESTRUCTIVE_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_DESTRUCTIVE_EXTERNAL_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=True,
+)
 _OAUTH_META = {
-    "securitySchemes": [
-        {
-            "type": "oauth2",
-            "scopes": [MCP_SCOPE],
-        }
-    ]
+    "securitySchemes": [{"type": "oauth2", "scopes": [MCP_SCOPE]}]
 }
-_NO_AUTH_META = {"securitySchemes": [{"type": "noauth"}]}
+_TEST_META = {"securitySchemes": [{"type": "noauth"}]}
 _SALES_BRIEF_PROMPT_PATH = (
     Path(__file__).resolve().parents[3]
     / "participant_sales_brief_generation_prompt.md"
 )
+_STRING_LIST_ADAPTER = TypeAdapter(list[str])
 
 
 @lru_cache(maxsize=1)
@@ -160,77 +175,54 @@ def _web_application_url(container: ServiceContainer) -> str | None:
 
 
 def _server_instructions(container: ServiceContainer) -> str:
-    instructions = [
-        (
-            "Use this evidence-first workflow for project questions; do not "
-            "answer from memory or general knowledge."
-        ),
-        (
-            "1. If the exact project_id is unknown, call list_projects and "
-            "select the matching project. Never invent an ID."
-        ),
-        (
-            "2. Call search_knowledge with several focused queries covering "
-            "the user's question. Use top_k=5 for a narrow lookup or "
-            "top_k=10-20 for broad dossier research; the valid range is 1-25."
-        ),
-        (
-            "3. Search results are previews, not complete evidence. Call "
-            "get_document_text for the strongest relevant documents before "
-            "making material claims. Use get_document_download_url only when "
-            "the user or workflow needs a local file. Use "
-            "list_project_documents to inventory sources or check whether "
-            "ingestion is READY."
-        ),
-        (
-            "4. Answer only from retrieved document text and verified facts. "
-            "Cite the document name and page, slide, or locator when present. "
-            "Retrieval scores rank evidence; they are not probabilities or "
-            "proof that a claim is true."
-        ),
-        (
-            "5. If multiple focused searches and the relevant complete "
-            "documents still do not answer the question, explain the gap. "
-            "Only then consider create_knowledge_gap instead of guessing."
-        ),
-        (
-            "6. Before create_knowledge_gap or resend_knowledge_gap_email, get "
-            "explicit user confirmation because these tools send external "
-            "email. Before record_verified_fact, get explicit confirmation; "
-            "never store an inference as a verified fact."
-        ),
-        (
-            "For a participant sales brief, use the "
-            "participant_sales_brief_generation prompt and follow its inline "
-            "citation requirements."
-        ),
-    ]
-    web_url = _web_application_url(container)
-    if web_url is None:
-        instructions.append(
-            "This MCP cannot upload documents. When a user needs to add one, "
-            "direct them to the deployment's web application."
-        )
-        return "\n".join(instructions)
-
-    settings = getattr(container, "settings", None)
-    max_upload_bytes = getattr(settings, "max_upload_bytes", None)
-    limit = ""
-    if isinstance(max_upload_bytes, int) and max_upload_bytes > 0:
-        limit_mib = max_upload_bytes / (1024 * 1024)
-        rendered_limit = (
-            str(int(limit_mib))
-            if limit_mib.is_integer()
-            else f"{limit_mib:.1f}"
-        )
-        limit = f" The current per-file limit is {rendered_limit} MiB."
-    instructions.append(
-        "This MCP cannot upload documents. When a user asks to add, upload, "
-        f"import, or ingest a document, direct them to {web_url} and tell "
-        f"them to use the document upload area.{limit} After upload, use "
-        "list_project_documents to check ingestion status."
+    web_url = _web_application_url(container) or "the deployment website"
+    return "\n".join(
+        [
+            "Use Blend Project Knowledge as the source of truth for project work.",
+            (
+                "1. Call get_current_user when permissions matter. If an exact "
+                "project_id is unknown, call list_projects; never invent an ID."
+            ),
+            (
+                "2. For evidence questions, call search_project_knowledge with "
+                "several focused queries. Search results are previews; open "
+                "material sources with get_document_text before making claims."
+            ),
+            (
+                "3. Cite document name plus page, slide, or locator. Treat "
+                "retrieval scores as ranking signals, not proof."
+            ),
+            (
+                "4. For uploads, call prepare_document_upload only when the "
+                "client can send a local file to the returned presigned S3 "
+                "POST. Otherwise direct the user to its fallback_url. Poll "
+                "get_document until READY or FAILED."
+            ),
+            (
+                "5. Use list_my_notifications, "
+                "list_my_collaboration_invitations, and "
+                "list_my_assigned_questions for inbox work. Inspect a question "
+                "and its answers before responding or reviewing."
+            ),
+            (
+                "6. Get explicit user confirmation before sending email, "
+                "inviting or removing collaborators, archiving a project, "
+                "rejecting an answer, or creating a verified fact. Never store "
+                "an inference as verified fact."
+            ),
+            (
+                "7. If project evidence is insufficient, explain the gap and "
+                "only then consider create_project_question. Reuse request_id "
+                "when retrying any write."
+            ),
+            (
+                "For participant sales briefs, use the "
+                "participant_sales_brief_generation prompt and follow every "
+                "inline citation requirement."
+            ),
+            f"Connection and browser-upload fallback: {web_url}",
+        ]
     )
-    return "\n".join(instructions)
 
 
 def build_mcp_server(
@@ -239,12 +231,12 @@ def build_mcp_server(
     oauth_provider: CognitoMcpOAuthProvider | None = None,
     auth_settings: AuthSettings | None = None,
 ) -> FastMCP:
-    tool_meta = _OAUTH_META if auth_settings is not None else _NO_AUTH_META
-    web_url = _web_application_url(container)
+    tool_meta = _OAUTH_META if auth_settings is not None else _TEST_META
+    application = KnowledgeApplication(container)
     mcp = FastMCP(
         "Blend Project Knowledge",
         instructions=_server_instructions(container),
-        website_url=web_url,
+        website_url=_web_application_url(container),
         host="0.0.0.0",
         auth_server_provider=oauth_provider,
         auth=auth_settings,
@@ -252,6 +244,43 @@ def build_mcp_server(
         json_response=True,
         streamable_http_path=MCP_PUBLIC_PATH,
     )
+
+    def current_principal() -> Principal:
+        access_token = get_access_token()
+        if access_token is None:
+            if auth_settings is not None:
+                raise ValueError(
+                    "This operation requires an authenticated Blend360 user"
+                )
+            return Principal(
+                subject="local-test-user",
+                email="local.test@blend360.com",
+                groups=frozenset(),
+                claims={"authentication_mode": "test"},
+            )
+        claims = access_token.claims or {}
+        groups: frozenset[str]
+        try:
+            groups = frozenset(
+                _STRING_LIST_ADAPTER.validate_python(
+                    claims.get("groups") or [],
+                    strict=True,
+                )
+            )
+        except ValidationError:
+            groups = frozenset()
+        return Principal(
+            subject=str(access_token.subject or ""),
+            email=str(claims.get("email") or "").strip().casefold(),
+            groups=groups,
+            claims=dict(claims),
+        )
+
+    def call[T](operation: Callable[[], T]) -> T:
+        try:
+            return operation()
+        except ApplicationError as exc:
+            raise ValueError(str(exc)) from exc
 
     @mcp.prompt(
         name="participant_sales_brief_generation",
@@ -265,7 +294,6 @@ def build_mcp_server(
         project_name: BriefProjectName,
         additional_context: BriefContext = None,
     ) -> str:
-        """Build the evidence-first PIH participant sales-brief prompt."""
         return (
             _sales_brief_prompt_template()
             .replace("[PROJECT_ID]", project_id)
@@ -298,10 +326,7 @@ def build_mcp_server(
                     except ValueError:
                         pass
                     else:
-                        return RedirectResponse(
-                            redirect_url,
-                            status_code=302,
-                        )
+                        return RedirectResponse(redirect_url, status_code=302)
                 return PlainTextResponse(
                     f"Authorization failed: {description}",
                     status_code=400,
@@ -329,111 +354,310 @@ def build_mcp_server(
             return RedirectResponse(redirect_url, status_code=302)
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
-    def list_projects() -> list[McpProject]:
-        """Discover valid project IDs and project names.
+    def get_current_user() -> McpCurrentUser:
+        """Return the authenticated identity and administrator status."""
+        return McpCurrentUser.model_validate(
+            call(lambda: application.get_current_user(current_principal()))
+        )
 
-        Call this first when the user has not provided an exact project_id.
-        Match by project name or description; never invent a project ID.
-        """
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_projects(
+        include_archived: bool = False,
+    ) -> list[McpProject]:
+        """List real project IDs, names, access roles, and allowed actions."""
         return [
-            McpProject.model_validate(project)
-            for project in container.repository.list_projects()
+            McpProject.model_validate(item)
+            for item in call(
+                lambda: application.list_projects(
+                    principal=current_principal(),
+                    include_archived=include_archived,
+                )
+            )
         ]
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
-    def search_knowledge(
+    def get_project(project_id: ProjectId) -> McpProject:
+        """Get one project and the current user's capabilities for it."""
+        return McpProject.model_validate(
+            call(
+                lambda: application.get_project(
+                    project_id,
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_INTERNAL_WRITE, meta=tool_meta)
+    def create_project(
+        name: ProjectName,
+        request_id: RequestId,
+        description: ProjectDescription = None,
+    ) -> McpProject:
+        """Create a project and make the current user its author."""
+        return McpProject.model_validate(
+            call(
+                lambda: application.create_project(
+                    ProjectCreate(name=name, description=description),
+                    principal=current_principal(),
+                    request_id=request_id,
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_INTERNAL_WRITE, meta=tool_meta)
+    def rename_project(
+        project_id: ProjectId,
+        name: ProjectName,
+    ) -> McpProject:
+        """Rename a project without changing its ID or documents."""
+        return McpProject.model_validate(
+            call(
+                lambda: application.rename_project(
+                    project_id,
+                    ProjectRename(name=name),
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_DESTRUCTIVE_WRITE, meta=tool_meta)
+    def archive_project(project_id: ProjectId) -> McpProject:
+        """Archive a project. Confirm explicitly; only admins may call this."""
+        return McpProject.model_validate(
+            call(
+                lambda: application.set_project_archived(
+                    project_id,
+                    archived=True,
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_INTERNAL_WRITE, meta=tool_meta)
+    def restore_project(project_id: ProjectId) -> McpProject:
+        """Restore an archived project; only admins may call this."""
+        return McpProject.model_validate(
+            call(
+                lambda: application.set_project_archived(
+                    project_id,
+                    archived=False,
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_project_collaborators(
+        project_id: ProjectId,
+    ) -> list[McpCollaborator]:
+        """List project authors and collaborators with membership sources."""
+        return [
+            McpCollaborator.model_validate(item)
+            for item in call(
+                lambda: application.list_project_collaborators(
+                    project_id,
+                    principal=current_principal(),
+                )
+            )
+        ]
+
+    @mcp.tool(annotations=_EXTERNAL_WRITE, meta=tool_meta)
+    def invite_project_collaborator(
+        project_id: ProjectId,
+        email: Email,
+        request_id: RequestId,
+    ) -> McpCollaborationInvitation:
+        """Invite a registered Blend employee; confirm because this emails them."""
+        return McpCollaborationInvitation.model_validate(
+            call(
+                lambda: application.invite_project_collaborator(
+                    project_id,
+                    CollaboratorInviteCreate(email=email),
+                    principal=current_principal(),
+                    request_id=request_id,
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_DESTRUCTIVE_WRITE, meta=tool_meta)
+    def remove_project_collaborator(
+        project_id: ProjectId,
+        email: Email,
+    ) -> McpCollaborator:
+        """Remove a collaborator and preserve suppression; confirm first."""
+        return McpCollaborator.model_validate(
+            call(
+                lambda: application.remove_project_collaborator(
+                    project_id,
+                    email,
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_my_collaboration_invitations(
+        include_decided: bool = False,
+    ) -> list[McpCollaborationInvitation]:
+        """List pending collaboration invitations for the current user."""
+        return [
+            McpCollaborationInvitation.model_validate(item)
+            for item in call(
+                lambda: application.list_my_collaboration_invitations(
+                    principal=current_principal(),
+                    include_decided=include_decided,
+                )
+            )
+        ]
+
+    @mcp.tool(annotations=_DESTRUCTIVE_WRITE, meta=tool_meta)
+    def decide_collaboration_invitation(
+        invitation_id: InvitationId,
+        decision: Literal["accept", "decline"],
+    ) -> McpCollaborationInvitation:
+        """Accept or decline an invitation addressed to the current user."""
+        return McpCollaborationInvitation.model_validate(
+            call(
+                lambda: application.decide_collaboration_invitation(
+                    invitation_id,
+                    InvitationDecisionRequest(decision=decision),
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_my_notifications(
+        unread_only: bool = False,
+    ) -> list[McpNotification]:
+        """List durable notifications for the current user."""
+        return [
+            McpNotification.model_validate(item)
+            for item in call(
+                lambda: application.list_my_notifications(
+                    principal=current_principal(),
+                    unread_only=unread_only,
+                )
+            )
+        ]
+
+    @mcp.tool(annotations=_INTERNAL_WRITE, meta=tool_meta)
+    def mark_notification_read(
+        notification_id: NotificationId,
+    ) -> McpNotification:
+        """Mark one notification belonging to the current user as read."""
+        return McpNotification.model_validate(
+            call(
+                lambda: application.mark_notification_read(
+                    notification_id,
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def search_all_projects(
+        query: QueryText,
+        top_k: TopK = 8,
+    ) -> McpSearchResponse:
+        """Search knowledge across every active project and return previews."""
+        return McpSearchResponse.from_search(
+            call(
+                lambda: application.search_all_projects(
+                    SearchRequest(query=query, top_k=top_k),
+                    principal=current_principal(),
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def search_project_knowledge(
         project_id: ProjectId,
         query: QueryText,
         top_k: TopK = 5,
     ) -> McpSearchResponse:
-        """Find evidence in one project and return ranked document previews.
-
-        Use multiple focused queries for different aspects of a broad question.
-        Use top_k=5 for focused lookup or 10-20 for broad dossier research.
-        Results contain previews only: call get_document_text for the strongest
-        relevant documents before making material claims. Scores rank results
-        but are not calibrated probabilities or proof of a claim.
-        """
-        container.repository.require_project(project_id)
-        response = container.retrieval.search(
-            project_id=project_id,
-            query=query,
-            top_k=top_k,
+        """Search one project; open material preview hits before citing them."""
+        return McpSearchResponse.from_search(
+            call(
+                lambda: application.search_project_knowledge(
+                    project_id,
+                    SearchRequest(query=query, top_k=top_k),
+                    principal=current_principal(),
+                )
+            )
         )
-        return McpSearchResponse.from_search(response)
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
     def list_project_documents(
         project_id: ProjectId,
     ) -> list[McpDocumentSummary]:
-        """Inventory a project's documents and inspect ingestion status.
-
-        Use this to discover available sources or verify that documents are
-        READY. markdown_available tells you whether the consolidated Markdown
-        can be downloaded. This does not return document contents; use
-        search_knowledge to find relevance and get_document_text to read
-        evidence.
-        """
-        container.repository.require_project(project_id)
+        """Inventory project documents and inspect ingestion status."""
         return [
-            McpDocumentSummary.from_record(document)
-            for document in container.repository.list_documents(project_id)
+            McpDocumentSummary.from_record(item)
+            for item in call(
+                lambda: application.list_project_documents(
+                    project_id,
+                    principal=current_principal(),
+                )
+            )
         ]
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def get_document(
+        project_id: ProjectId,
+        document_id: DocumentId,
+    ) -> McpDocumentSummary:
+        """Get metadata, status, failure detail, and next action for a document."""
+        return McpDocumentSummary.from_record(
+            call(
+                lambda: application.get_document(
+                    project_id,
+                    document_id,
+                    principal=current_principal(),
+                )
+            )
+        )
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
     def get_document_text(
         project_id: ProjectId,
         document_id: DocumentId,
     ) -> McpDocumentText:
-        """Read the complete indexed text of a relevant document.
-
-        Call this with a document_id returned by search_knowledge before
-        relying on a preview for material claims. Preserve the returned
-        document name and page or locator metadata in source citations.
-        """
-        document = container.repository.get_document(
-            project_id=project_id,
-            document_id=document_id,
-        )
-        if document is None:
-            raise ValueError(f"Unknown document: {document_id}")
-        indexed_documents = container.search.get_indexed_documents(
-            project_id=project_id,
-            document_id=document_id,
-            size=1000,
+        """Read complete indexed text after selecting a relevant document."""
+        document, indexed = call(
+            lambda: application.get_document_text(
+                project_id,
+                document_id,
+                principal=current_principal(),
+            )
         )
         return McpDocumentText.from_records(
             document=document,
-            indexed_documents=indexed_documents,
+            indexed_documents=indexed,
         )
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
     def get_document_download_url(
         project_id: ProjectId,
         document_id: DocumentId,
-        download_format: DocumentDownloadFormat = "original",
+        download_format: DownloadFormat = "original",
     ) -> McpDocumentDownload:
-        """Get a time-limited URL for a document file.
-
-        Use original when the exact uploaded source is needed. Use markdown
-        for the consolidated cleaned and enhanced Markdown generated during
-        ingestion. This tool returns a download URL rather than document text;
-        use get_document_text when the agent only needs to read evidence.
-        """
-        document = container.repository.get_document(
-            project_id=project_id,
-            document_id=document_id,
+        """Return a time-limited original or enhanced-Markdown download URL."""
+        document = call(
+            lambda: application.get_document(
+                project_id,
+                document_id,
+                principal=current_principal(),
+            )
         )
-        if document is None:
-            raise ValueError(f"Unknown document: {document_id}")
-        try:
-            download = presign_document_download(
-                s3=container.s3,
-                document=document,
+        download = call(
+            lambda: application.get_document_download(
+                project_id,
+                document_id,
+                principal=current_principal(),
                 download_format=download_format,
             )
-        except DocumentDownloadUnavailable as exc:
-            raise ValueError(str(exc)) from exc
+        )
         return McpDocumentDownload(
             project_id=project_id,
             document_id=document_id,
@@ -445,135 +669,242 @@ def build_mcp_server(
             expires_in_seconds=download.expires_in_seconds,
         )
 
-    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
-    def list_verified_facts(project_id: ProjectId) -> list[McpVerifiedFact]:
-        """List explicitly verified facts and their provenance.
-
-        Use these as authoritative project context, but retain the provenance
-        in the answer and prefer document evidence when a source is available.
-        """
-        container.repository.require_project(project_id)
-        return [
-            McpVerifiedFact.model_validate(fact)
-            for fact in container.repository.list_verified_facts(project_id)
-        ]
-
-    @mcp.tool(annotations=_EMAIL_CREATE, meta=tool_meta)
-    def create_knowledge_gap(
+    @mcp.tool(annotations=_EXTERNAL_WRITE, meta=tool_meta)
+    def prepare_document_upload(
         project_id: ProjectId,
-        question: QuestionText,
-        assigned_expert_email: ExpertEmail,
+        filename: Filename,
+        content_type: ContentType,
+        size_bytes: FileSize,
         request_id: RequestId,
-        context: GapContext = None,
-        priority: Literal["low", "normal", "high"] = "normal",
-    ) -> McpKnowledgeGap:
-        """Record missing knowledge and immediately email the assigned expert.
-
-        Use only after several focused searches and relevant complete documents
-        still leave a material gap. Explain that gap to the user, then get
-        explicit confirmation for the recipient, question, and context before
-        calling because this sends external email. Reuse request_id when
-        retrying the same intended action.
-        """
-        question_id = stable_action_id(
-            prefix="gap",
-            project_id=project_id,
-            request_id=request_id,
-        )
-        existing = container.repository.get_question(
-            project_id=project_id,
-            question_id=question_id,
-        )
-        if existing is not None:
-            return McpKnowledgeGap.model_validate(existing)
-        gap = KnowledgeGapCreate(
-            question=question,
-            assigned_expert_email=assigned_expert_email,
-            context=context,
-            priority=priority,
-        )
-        created = container.questions.create_question(
-            project_id=project_id,
-            gap=gap,
-            created_by="mcp-agent",
-            question_id=question_id,
-        )
-        return McpKnowledgeGap.model_validate(created)
-
-    @mcp.tool(annotations=_EMAIL_RESEND, meta=tool_meta)
-    def resend_knowledge_gap_email(
-        project_id: ProjectId,
-        question_id: QuestionId,
-    ) -> McpKnowledgeGap:
-        """Resend an existing knowledge-gap email.
-
-        First use get_knowledge_gap to inspect status. Resend only when the user
-        explicitly asks or confirms it, because this contacts an external
-        recipient. Do not resend a resolved gap.
-        """
-        return McpKnowledgeGap.model_validate(
-            container.questions.resend_question(
-                project_id=project_id,
-                question_id=question_id,
+    ) -> McpDocumentUpload:
+        """Prepare direct-to-S3 upload fields plus a browser fallback URL."""
+        return McpDocumentUpload.from_session(
+            call(
+                lambda: application.prepare_document_upload(
+                    project_id,
+                    UploadRequest(
+                        filename=filename,
+                        content_type=content_type,
+                        size_bytes=size_bytes,
+                        request_id=request_id,
+                    ),
+                    principal=current_principal(),
+                    request_id=request_id,
+                )
             )
         )
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
-    def get_knowledge_gap(
+    def list_verified_facts(
         project_id: ProjectId,
-        question_id: QuestionId,
-    ) -> McpKnowledgeGap:
-        """Check one knowledge gap's status and notification outcome.
-
-        Use this to report whether a question is open, needs more information,
-        or is resolved. Reading status does not resend the email.
-        """
-        question = container.repository.get_question(
-            project_id=project_id,
-            question_id=question_id,
-        )
-        if question is None:
-            raise ValueError(f"Unknown knowledge gap: {question_id}")
-        return McpKnowledgeGap.model_validate(question)
+    ) -> list[McpVerifiedFact]:
+        """List explicitly verified facts and their provenance."""
+        return [
+            McpVerifiedFact.model_validate(item)
+            for item in call(
+                lambda: application.list_verified_facts(
+                    project_id,
+                    principal=current_principal(),
+                )
+            )
+        ]
 
     @mcp.tool(annotations=_INTERNAL_WRITE, meta=tool_meta)
-    def record_verified_fact(
+    def create_verified_fact(
         project_id: ProjectId,
         name: FactName,
         value: FactValue,
         provenance: FactProvenance,
         request_id: RequestId,
     ) -> McpVerifiedFact:
-        """Store an explicitly verified fact with human-readable provenance.
-
-        Use only for information explicitly confirmed as authoritative by the
-        user or a named expert. Get user confirmation first, include meaningful
-        provenance, and never promote an inference or unverified search result.
-        This is not a substitute for retrieval. Reuse request_id when retrying
-        the same intended action.
-        """
+        """Store a confirmed fact; get explicit confirmation and never infer."""
         fact_id = stable_action_id(
             prefix="fact",
             project_id=project_id,
             request_id=request_id,
         )
-        existing = container.repository.get_verified_fact(
-            project_id=project_id,
-            fact_id=fact_id,
+        return McpVerifiedFact.model_validate(
+            call(
+                lambda: application.create_verified_fact(
+                    project_id,
+                    VerifiedFactCreate(
+                        name=name,
+                        value=value,
+                        provenance=provenance,
+                    ),
+                    principal=current_principal(),
+                    fact_id=fact_id,
+                )
+            )
         )
-        if existing is not None:
-            return McpVerifiedFact.model_validate(existing)
-        stored = container.repository.put_verified_fact(
-            project_id=project_id,
-            fact_id=fact_id,
-            fact=VerifiedFactCreate(
-                name=name,
-                value=value,
-                provenance=provenance,
-            ),
-            created_by="mcp-agent",
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_project_questions(
+        project_id: ProjectId,
+    ) -> list[McpQuestion]:
+        """List a project's open, follow-up, and resolved questions."""
+        return [
+            McpQuestion.model_validate(item)
+            for item in call(
+                lambda: application.list_project_questions(
+                    project_id,
+                    principal=current_principal(),
+                )
+            )
+        ]
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_my_assigned_questions(
+        include_resolved: bool = False,
+    ) -> list[McpQuestion]:
+        """List questions explicitly assigned to the current user."""
+        return [
+            McpQuestion.model_validate(item)
+            for item in call(
+                lambda: application.list_my_assigned_questions(
+                    principal=current_principal(),
+                    include_resolved=include_resolved,
+                )
+            )
+        ]
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def get_project_question(
+        project_id: ProjectId,
+        question_id: QuestionId,
+    ) -> McpQuestion:
+        """Get one question, its notification state, and latest review state."""
+        return McpQuestion.model_validate(
+            call(
+                lambda: application.get_project_question(
+                    project_id,
+                    question_id,
+                    principal=current_principal(),
+                )
+            )
         )
-        return McpVerifiedFact.model_validate(stored)
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def list_question_answers(
+        project_id: ProjectId,
+        question_id: QuestionId,
+    ) -> list[McpAnswer]:
+        """Inspect answer text, evidence, and human/LLM review state."""
+        return [
+            McpAnswer.model_validate(item)
+            for item in call(
+                lambda: application.list_question_answers(
+                    project_id,
+                    question_id,
+                    principal=current_principal(),
+                )
+            )
+        ]
+
+    @mcp.tool(annotations=_EXTERNAL_WRITE, meta=tool_meta)
+    def create_project_question(
+        project_id: ProjectId,
+        question: QuestionText,
+        request_id: RequestId,
+        assigned_expert_email: Email | None = None,
+        context: QuestionContext = None,
+        priority: Literal["low", "normal", "high"] = "normal",
+    ) -> McpQuestion:
+        """Create a knowledge question; confirm because members may be emailed."""
+        question_id = stable_action_id(
+            prefix="gap",
+            project_id=project_id,
+            request_id=request_id,
+        )
+        return McpQuestion.model_validate(
+            call(
+                lambda: application.create_project_question(
+                    project_id,
+                    KnowledgeGapCreate(
+                        question=question,
+                        assigned_expert_email=assigned_expert_email,
+                        context=context,
+                        priority=priority,
+                    ),
+                    principal=current_principal(),
+                    question_id=question_id,
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_EXTERNAL_WRITE, meta=tool_meta)
+    def submit_question_answer(
+        project_id: ProjectId,
+        question_id: QuestionId,
+        request_id: RequestId,
+        answer: AnswerText = "",
+        supporting_document_ids: SupportingDocumentIds | None = None,
+    ) -> McpAnswer:
+        """Answer with text and/or READY project documents; retries are safe."""
+        answer_id = stable_action_id(
+            prefix="ans",
+            project_id=project_id,
+            request_id=f"{question_id}:{request_id}",
+        )
+        return McpAnswer.model_validate(
+            call(
+                lambda: application.submit_question_answer(
+                    project_id,
+                    question_id,
+                    AnswerSubmit(
+                        answer=answer,
+                        supporting_document_ids=supporting_document_ids or [],
+                        request_id=request_id,
+                    ),
+                    principal=current_principal(),
+                    answer_id=answer_id,
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_DESTRUCTIVE_EXTERNAL_WRITE, meta=tool_meta)
+    def review_question_answer(
+        project_id: ProjectId,
+        question_id: QuestionId,
+        answer_id: AnswerId,
+        decision: Literal["approve", "reject"],
+        request_id: RequestId,
+        note: ReviewNote = None,
+    ) -> McpAnswer:
+        """Approve or reject an external answer; confirm before rejecting."""
+        return McpAnswer.model_validate(
+            call(
+                lambda: application.review_question_answer(
+                    project_id,
+                    question_id,
+                    answer_id,
+                    HumanAnswerReviewRequest(
+                        decision=decision,
+                        note=note,
+                    ),
+                    principal=current_principal(),
+                    request_id=request_id,
+                )
+            )
+        )
+
+    @mcp.tool(annotations=_EXTERNAL_WRITE, meta=tool_meta)
+    def resend_question_email(
+        project_id: ProjectId,
+        question_id: QuestionId,
+        request_id: RequestId,
+    ) -> McpQuestion:
+        """Resend a question email only after explicit user confirmation."""
+        return McpQuestion.model_validate(
+            call(
+                lambda: application.resend_question_email(
+                    project_id,
+                    question_id,
+                    principal=current_principal(),
+                    request_id=request_id,
+                )
+            )
+        )
 
     return mcp
 

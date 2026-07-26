@@ -7,6 +7,10 @@ import boto3
 from app.mcp_oauth_store import McpOAuthStore
 from knowledge_core.dynamo import KnowledgeRepository
 from knowledge_core.email_service import SesEmailService
+from knowledge_core.notifications import (
+    MatchingPublisher,
+    NotificationPublisher,
+)
 from knowledge_core.openai_api import OpenAIService
 from knowledge_core.opensearch import OpenSearchServerlessClient
 from knowledge_core.question_workflow import QuestionWorkflow
@@ -81,8 +85,29 @@ class ServiceContainer:
             repository=self.repository,
             email_sender=self.email_sender,
             reply_domain=self.settings.ses_reply_domain,
+            notifications=self.notifications,
+            application_base_url=self.settings.application_base_url,
         )
 
     @cached_property
     def s3(self):
         return boto3.client("s3", region_name=self.settings.aws_region)
+
+    @cached_property
+    def sqs(self):
+        return boto3.client("sqs", region_name=self.settings.aws_region)
+
+    @cached_property
+    def notifications(self) -> NotificationPublisher:
+        return NotificationPublisher(
+            repository=self.repository,
+            queue_url=self.settings.notification_queue_url,
+            sqs_client=self.sqs,
+        )
+
+    @cached_property
+    def matching(self) -> MatchingPublisher:
+        return MatchingPublisher(
+            queue_url=self.settings.matching_queue_url,
+            sqs_client=self.sqs,
+        )

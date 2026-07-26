@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "blend-project-knowledge",
   "displayName": "Blend Project Knowledge",
-  "version": "0.2.0",
-  "description": "Search Blend project evidence and create source-cited project dossiers.",
+  "version": "1.0.0",
+  "description": "Manage Blend project knowledge and create source-cited dossiers.",
   "author": {
     "name": "Blend360"
   },

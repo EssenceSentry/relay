@@ -203,6 +203,7 @@ class CognitoMcpOAuthProvider:
                 "scopes": list(pending["scopes"]),
                 "subject": principal.subject,
                 "email": principal.email,
+                "groups": sorted(principal.groups),
             },
             expires_at=now + _AUTHORIZATION_CODE_SECONDS,
         )
@@ -281,6 +282,7 @@ class CognitoMcpOAuthProvider:
             resource=str(data["resource"]),
             subject=str(data["subject"]),
             email=str(data["email"]),
+            groups=list(data.get("groups") or []),
         )
 
     async def load_refresh_token(
@@ -317,6 +319,7 @@ class CognitoMcpOAuthProvider:
             resource=str(data["resource"]),
             subject=str(data["subject"]),
             email=str(data["email"]),
+            groups=list(data.get("groups") or []),
         )
 
     async def load_access_token(self, token: str) -> AccessToken | None:
@@ -335,6 +338,7 @@ class CognitoMcpOAuthProvider:
                 claims={
                     "iss": self._issuer_url,
                     "email": str(data["email"]),
+                    "groups": list(data.get("groups") or []),
                 },
             )
         return None
@@ -375,6 +379,7 @@ class CognitoMcpOAuthProvider:
         resource: str,
         subject: str,
         email: str,
+        groups: list[str],
     ) -> OAuthToken:
         now = int(time.time())
         access_token = secrets.token_urlsafe(48)
@@ -387,6 +392,7 @@ class CognitoMcpOAuthProvider:
             "resource": resource,
             "subject": subject,
             "email": email,
+            "groups": groups,
         }
         self._store.put_access_token(
             access_token,

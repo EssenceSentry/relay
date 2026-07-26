@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from typing import Any
 
+import requests
 from botocore.credentials import Credentials
 
 from knowledge_core.opensearch import (
@@ -166,3 +168,86 @@ def test_delete_document_uses_supported_bulk_deletes() -> None:
     client.delete_document(project_id="prj_1", document_id="doc_1")
 
     assert client.deleted_ids == ["idx_1", "idx_2"]
+
+
+class PaginatedClient(OpenSearchServerlessClient):
+    def __init__(self) -> None:
+        super().__init__(
+            endpoint="https://example.invalid",
+            region="us-east-1",
+            index_name="documents",
+            dimensions=3,
+        )
+        self.bodies: list[Mapping[str, Any]] = []
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Mapping[str, Any] | None = None,
+        raw_body: bytes | None = None,
+        content_type: str = "application/json",
+        acceptable: set[int] | None = None,
+    ) -> requests.Response:
+        del method, path, raw_body, content_type, acceptable
+        assert json_body is not None
+        self.bodies.append(json_body)
+        page = len(self.bodies)
+        hits = (
+            [
+                {
+                    "_id": "idx_1",
+                    "_source": {
+                        "index_id": "idx_1",
+                        "project_id": "prj_1",
+                        "embedding": [0.1, 0.2, 0.3],
+                    },
+                    "sort": ["idx_1"],
+                },
+                {
+                    "_id": "idx_2",
+                    "_source": {
+                        "index_id": "idx_2",
+                        "project_id": "prj_1",
+                        "embedding": [0.4, 0.5, 0.6],
+                    },
+                    "sort": ["idx_2"],
+                },
+            ]
+            if page == 1
+            else [
+                {
+                    "_id": "idx_3",
+                    "_source": {
+                        "index_id": "idx_3",
+                        "project_id": "prj_1",
+                        "embedding": [0.7, 0.8, 0.9],
+                    },
+                    "sort": ["idx_3"],
+                }
+            ]
+        )
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps({"hits": {"hits": hits}}).encode()
+        return response
+
+
+def test_get_project_documents_paginates_and_keeps_embeddings() -> None:
+    client = PaginatedClient()
+
+    documents = client.get_project_documents(
+        project_id="prj_1",
+        include_embedding=True,
+        page_size=2,
+    )
+
+    assert [document["index_id"] for document in documents] == [
+        "idx_1",
+        "idx_2",
+        "idx_3",
+    ]
+    assert documents[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert client.bodies[0]["_source"] == {"includes": ["*"]}
+    assert client.bodies[1]["search_after"] == ["idx_2"]

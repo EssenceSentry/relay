@@ -1,37 +1,44 @@
+# FastAPI registers these nested route functions through decorators.
 # pyright: reportUnusedFunction=false
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from functools import partial
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 
-from app.auth import Principal
-from app.document_downloads import (
-    DocumentDownloadUnavailable,
-    presign_document_download,
+from app.application import (
+    ApplicationError,
+    KnowledgeApplication,
 )
+from app.auth import Principal
 from app.services import ServiceContainer
-from knowledge_core.ids import new_id, safe_filename
+from knowledge_core.ids import stable_action_id
 from knowledge_core.models import (
     AnswerSubmit,
-    DocumentStatus,
+    CollaboratorInviteCreate,
+    HumanAnswerReviewRequest,
+    InvitationDecisionRequest,
     KnowledgeGapCreate,
     ProjectCreate,
+    ProjectRename,
     SearchRequest,
     UploadRequest,
     VerifiedFactCreate,
 )
 
-_SUPPORTED_SUFFIXES = {
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".pptx",
-    ".txt",
-    ".md",
-    ".csv",
-    ".json",
-}
+IdempotencyKey = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    ),
+]
 
 
 class DownloadUrlResponse(BaseModel):
@@ -47,21 +54,10 @@ class PresignedUploadResponse(BaseModel):
     upload_url: str
     fields: dict[str, str]
     expires_in_seconds: int
-
-
-class PublicQuestionResponse(BaseModel):
-    project_name: str
-    question: str
-    context: str | None = None
-    priority: str
-    status: str
-    review_rationale: str | None = None
-    can_answer: bool
-
-
-class PublicAnswerResponse(BaseModel):
-    status: str
-    answer_id: str
+    fallback_url: str
+    max_upload_bytes: int
+    supported_extensions: list[str]
+    upload_required: bool
 
 
 class WebSearchHitResponse(BaseModel):
@@ -85,15 +81,31 @@ class WebSearchResponse(BaseModel):
     warnings: list[str]
 
 
-AnswerTokenHeader = Annotated[
-    str,
-    Header(
-        alias="X-Answer-Token",
-        min_length=32,
-        max_length=128,
-        pattern=r"^[a-f0-9]+$",
-    ),
-]
+def _api_call[T](function: Callable[[], T]) -> T:
+    try:
+        return function()
+    except ApplicationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=str(exc),
+        ) from exc
+
+
+def _required_request_id(
+    *,
+    body_request_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> str:
+    request_id = body_request_id or idempotency_key
+    if request_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "A stable request_id or Idempotency-Key is required for "
+                "this operation"
+            ),
+        )
+    return request_id
 
 
 def build_api_router(
@@ -101,72 +113,40 @@ def build_api_router(
     principal_dependency: Any,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
-    principal_default = cast(
-        Principal,
-        Depends(principal_dependency),
-    )
-
-    @router.get(
-        "/public/question",
-        response_model=PublicQuestionResponse,
-    )
-    def get_public_question(
-        answer_token: AnswerTokenHeader,
-    ) -> PublicQuestionResponse:
-        question = _question_for_answer_token(container, answer_token)
-        return _public_question_response(question)
-
-    @router.post(
-        "/public/question/answers",
-        response_model=PublicAnswerResponse,
-        status_code=status.HTTP_202_ACCEPTED,
-    )
-    def submit_public_question_answer(
-        body: AnswerSubmit,
-        answer_token: AnswerTokenHeader,
-    ) -> PublicAnswerResponse:
-        question = _question_for_answer_token(container, answer_token)
-        try:
-            answer = container.repository.submit_answer(
-                project_id=question["project_id"],
-                question_id=question["question_id"],
-                answer=body.answer,
-                answered_by=question["assigned_expert_email"],
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return PublicAnswerResponse(
-            status="SUBMITTED",
-            answer_id=str(answer["answer_id"]),
-        )
+    application = KnowledgeApplication(container)
+    principal_default = cast(Principal, Depends(principal_dependency))
 
     @router.get("/me")
-    def me(
+    def get_current_user(
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        return {
-            "subject": principal.subject,
-            "email": principal.email,
-            "groups": sorted(principal.groups),
-            "is_admin": principal.is_admin,
-        }
+        return _api_call(lambda: application.get_current_user(principal))
 
     @router.get("/projects")
     def list_projects(
+        include_archived: bool = False,
         principal: Principal = principal_default,
     ) -> list[dict[str, Any]]:
-        del principal
-        return container.repository.list_projects()
+        return _api_call(
+            lambda: application.list_projects(
+                principal=principal,
+                include_archived=include_archived,
+            )
+        )
 
     @router.post("/projects", status_code=status.HTTP_201_CREATED)
     def create_project(
         body: ProjectCreate,
+        idempotency_key: IdempotencyKey = None,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        return container.repository.create_project(
-            name=body.name,
-            description=body.description,
-            created_by=principal.email,
+        request_id = _required_request_id(idempotency_key=idempotency_key)
+        return _api_call(
+            lambda: application.create_project(
+                body,
+                principal=principal,
+                request_id=request_id,
+            )
         )
 
     @router.get("/projects/{project_id}")
@@ -174,20 +154,162 @@ def build_api_router(
         project_id: str,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        del principal
-        project = container.repository.get_project(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-        return project
+        return _api_call(
+            lambda: application.get_project(
+                project_id,
+                principal=principal,
+            )
+        )
 
-    @router.get("/projects/{project_id}/documents")
-    def list_documents(
+    @router.patch("/projects/{project_id}")
+    def rename_project(
+        project_id: str,
+        body: ProjectRename,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        return _api_call(
+            lambda: application.rename_project(
+                project_id,
+                body,
+                principal=principal,
+            )
+        )
+
+    @router.delete("/projects/{project_id}")
+    def archive_project(
+        project_id: str,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        return _api_call(
+            lambda: application.set_project_archived(
+                project_id,
+                archived=True,
+                principal=principal,
+            )
+        )
+
+    @router.post("/projects/{project_id}/restore")
+    def restore_project(
+        project_id: str,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        return _api_call(
+            lambda: application.set_project_archived(
+                project_id,
+                archived=False,
+                principal=principal,
+            )
+        )
+
+    @router.get("/projects/{project_id}/collaborators")
+    def list_project_collaborators(
         project_id: str,
         principal: Principal = principal_default,
     ) -> list[dict[str, Any]]:
-        del principal
-        _require_project(container, project_id)
-        return container.repository.list_documents(project_id)
+        return _api_call(
+            lambda: application.list_project_collaborators(
+                project_id,
+                principal=principal,
+            )
+        )
+
+    @router.post(
+        "/projects/{project_id}/collaboration-invitations",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def invite_project_collaborator(
+        project_id: str,
+        body: CollaboratorInviteCreate,
+        idempotency_key: IdempotencyKey = None,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        request_id = _required_request_id(idempotency_key=idempotency_key)
+        return _api_call(
+            lambda: application.invite_project_collaborator(
+                project_id,
+                body,
+                principal=principal,
+                request_id=request_id,
+            )
+        )
+
+    @router.delete(
+        "/projects/{project_id}/collaborators/{collaborator_email}",
+    )
+    def remove_project_collaborator(
+        project_id: str,
+        collaborator_email: str,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        return _api_call(
+            lambda: application.remove_project_collaborator(
+                project_id,
+                collaborator_email,
+                principal=principal,
+            )
+        )
+
+    @router.get("/me/collaboration-invitations")
+    def list_my_collaboration_invitations(
+        include_decided: bool = False,
+        principal: Principal = principal_default,
+    ) -> list[dict[str, Any]]:
+        return _api_call(
+            lambda: application.list_my_collaboration_invitations(
+                principal=principal,
+                include_decided=include_decided,
+            )
+        )
+
+    @router.post("/me/collaboration-invitations/{invitation_id}/decision")
+    def decide_collaboration_invitation(
+        invitation_id: str,
+        body: InvitationDecisionRequest,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        return _api_call(
+            lambda: application.decide_collaboration_invitation(
+                invitation_id,
+                body,
+                principal=principal,
+            )
+        )
+
+    @router.get("/me/notifications")
+    def list_my_notifications(
+        unread_only: bool = False,
+        principal: Principal = principal_default,
+    ) -> list[dict[str, Any]]:
+        return _api_call(
+            lambda: application.list_my_notifications(
+                principal=principal,
+                unread_only=unread_only,
+            )
+        )
+
+    @router.post("/me/notifications/{notification_id}/read")
+    def mark_notification_read(
+        notification_id: str,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        return _api_call(
+            lambda: application.mark_notification_read(
+                notification_id,
+                principal=principal,
+            )
+        )
+
+    @router.get("/projects/{project_id}/documents")
+    def list_project_documents(
+        project_id: str,
+        principal: Principal = principal_default,
+    ) -> list[dict[str, Any]]:
+        return _api_call(
+            lambda: application.list_project_documents(
+                project_id,
+                principal=principal,
+            )
+        )
 
     @router.get("/projects/{project_id}/documents/{document_id}")
     def get_document(
@@ -195,34 +317,26 @@ def build_api_router(
         document_id: str,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        del principal
-        document = container.repository.get_document(
-            project_id=project_id,
-            document_id=document_id,
+        return _api_call(
+            lambda: application.get_document(
+                project_id,
+                document_id,
+                principal=principal,
+            )
         )
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        return document
 
-    @router.get(
-        "/projects/{project_id}/documents/{document_id}/text",
-    )
+    @router.get("/projects/{project_id}/documents/{document_id}/text")
     def get_document_text(
         project_id: str,
         document_id: str,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        del principal
-        document = container.repository.get_document(
-            project_id=project_id,
-            document_id=document_id,
-        )
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        indexed_documents = container.search.get_indexed_documents(
-            project_id=project_id,
-            document_id=document_id,
-            size=1000,
+        document, indexed_documents = _api_call(
+            lambda: application.get_document_text(
+                project_id,
+                document_id,
+                principal=principal,
+            )
         )
         return {
             "document": document,
@@ -236,24 +350,17 @@ def build_api_router(
     def get_document_download_url(
         project_id: str,
         document_id: str,
-        principal: Principal = principal_default,
         download_format: Literal["original", "markdown"] = "original",
+        principal: Principal = principal_default,
     ) -> DownloadUrlResponse:
-        del principal
-        document = container.repository.get_document(
-            project_id=project_id,
-            document_id=document_id,
-        )
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        try:
-            download = presign_document_download(
-                s3=container.s3,
-                document=document,
+        download = _api_call(
+            lambda: application.get_document_download(
+                project_id,
+                document_id,
+                principal=principal,
                 download_format=download_format,
             )
-        except DocumentDownloadUnavailable as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        )
         return DownloadUrlResponse(
             url=download.url,
             filename=download.filename,
@@ -267,69 +374,33 @@ def build_api_router(
         response_model=PresignedUploadResponse,
         status_code=status.HTTP_201_CREATED,
     )
-    def presign_upload(
+    def prepare_document_upload(
         project_id: str,
         body: UploadRequest,
+        idempotency_key: IdempotencyKey = None,
         principal: Principal = principal_default,
     ) -> PresignedUploadResponse:
-        _require_project(container, project_id)
-        filename = safe_filename(body.filename)
-        suffix = _suffix(filename)
-        if suffix not in _SUPPORTED_SUFFIXES:
-            supported = ", ".join(sorted(_SUPPORTED_SUFFIXES))
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file extension. Supported: {supported}",
-            )
-        if body.size_bytes > container.settings.max_upload_bytes:
-            limit_mib = container.settings.max_upload_bytes // (1024 * 1024)
-            raise HTTPException(
-                status_code=413,
-                detail=f"File exceeds the {limit_mib} MiB upload limit",
-            )
-
-        document_id = new_id("doc")
-        key = f"uploads/{project_id}/{document_id}/{filename}"
-        document = container.repository.create_document(
-            project_id=project_id,
-            document_id=document_id,
-            document_name=body.filename,
-            s3_bucket=container.settings.document_bucket,
-            s3_key=key,
-            content_type=body.content_type,
-            size_bytes=body.size_bytes,
-            status=DocumentStatus.UPLOADING,
-            uploaded_by=principal.email,
+        request_id = _required_request_id(
+            body_request_id=body.request_id,
+            idempotency_key=idempotency_key,
         )
-        fields = {
-            "Content-Type": body.content_type,
-            "x-amz-meta-project-id": project_id,
-            "x-amz-meta-document-id": document_id,
-        }
-        presigned = container.s3.generate_presigned_post(
-            Bucket=container.settings.document_bucket,
-            Key=key,
-            Fields=fields,
-            Conditions=[
-                {"Content-Type": body.content_type},
-                {"x-amz-meta-project-id": project_id},
-                {"x-amz-meta-document-id": document_id},
-                [
-                    "content-length-range",
-                    1,
-                    min(
-                        body.size_bytes + 1024,
-                        container.settings.max_upload_bytes,
-                    ),
-                ],
-            ],
-            ExpiresIn=900,
+        upload = _api_call(
+            lambda: application.prepare_document_upload(
+                project_id,
+                body,
+                principal=principal,
+                request_id=request_id,
+            )
         )
         return PresignedUploadResponse(
-            document=document,
-            upload_url=presigned["url"],
-            fields=presigned["fields"],
-            expires_in_seconds=900,
+            document=upload.document,
+            upload_url=upload.upload_url,
+            fields=upload.fields,
+            expires_in_seconds=upload.expires_in_seconds,
+            fallback_url=upload.fallback_url,
+            max_upload_bytes=upload.max_upload_bytes,
+            supported_extensions=list(upload.supported_extensions),
+            upload_required=upload.upload_required,
         )
 
     @router.post("/search", response_model=WebSearchResponse)
@@ -337,23 +408,28 @@ def build_api_router(
         body: SearchRequest,
         principal: Principal = principal_default,
     ) -> WebSearchResponse:
-        del principal
-        response = container.retrieval.search_across_projects(
-            query=body.query,
-            top_k=body.top_k,
+        response = _api_call(
+            lambda: application.search_all_projects(
+                body,
+                principal=principal,
+            )
         )
         projects = {
             str(project["project_id"]): project
-            for project in container.repository.list_projects()
+            for project in _api_call(
+                lambda: application.list_projects(principal=principal)
+            )
         }
         hits: list[WebSearchHitResponse] = []
         for hit in response.hits:
-            document = container.repository.get_document(
-                project_id=hit.project_id,
-                document_id=hit.document_id,
+            document = _api_call(
+                partial(
+                    application.get_document,
+                    hit.project_id,
+                    hit.document_id,
+                    principal=principal,
+                )
             )
-            if document is None:
-                continue
             project = projects.get(hit.project_id, {})
             preview, truncated = _search_text_preview(hit.text)
             hits.append(
@@ -379,41 +455,54 @@ def build_api_router(
         )
 
     @router.post("/projects/{project_id}/search")
-    def search_project(
+    def search_project_knowledge(
         project_id: str,
         body: SearchRequest,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        del principal
-        _require_project(container, project_id)
-        return container.retrieval.search(
-            project_id=project_id,
-            query=body.query,
-            top_k=body.top_k,
-        ).model_dump()
+        return _api_call(
+            lambda: application.search_project_knowledge(
+                project_id,
+                body,
+                principal=principal,
+            ).model_dump()
+        )
 
     @router.get("/projects/{project_id}/facts")
-    def list_facts(
+    def list_verified_facts(
         project_id: str,
         principal: Principal = principal_default,
     ) -> list[dict[str, Any]]:
-        del principal
-        _require_project(container, project_id)
-        return container.repository.list_verified_facts(project_id)
+        return _api_call(
+            lambda: application.list_verified_facts(
+                project_id,
+                principal=principal,
+            )
+        )
 
     @router.post(
         "/projects/{project_id}/facts",
         status_code=status.HTTP_201_CREATED,
     )
-    def create_fact(
+    def create_verified_fact(
         project_id: str,
         body: VerifiedFactCreate,
+        idempotency_key: IdempotencyKey = None,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        return container.repository.put_verified_fact(
+        request_id = _required_request_id(idempotency_key=idempotency_key)
+        fact_id = stable_action_id(
+            prefix="fact",
             project_id=project_id,
-            fact=body,
-            created_by=principal.email,
+            request_id=request_id,
+        )
+        return _api_call(
+            lambda: application.create_verified_fact(
+                project_id,
+                body,
+                principal=principal,
+                fact_id=fact_id,
+            )
         )
 
     @router.get("/projects/{project_id}/questions")
@@ -421,166 +510,162 @@ def build_api_router(
         project_id: str,
         principal: Principal = principal_default,
     ) -> list[dict[str, Any]]:
-        if not principal.is_admin:
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can list every project question",
+        return _api_call(
+            lambda: application.list_project_questions(
+                project_id,
+                principal=principal,
             )
-        _require_project(container, project_id)
-        return container.repository.list_project_questions(project_id)
+        )
 
     @router.post(
         "/projects/{project_id}/questions",
         status_code=status.HTTP_201_CREATED,
     )
-    def create_question(
+    def create_project_question(
         project_id: str,
         body: KnowledgeGapCreate,
+        idempotency_key: IdempotencyKey = None,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        return container.questions.create_question(
+        request_id = _required_request_id(idempotency_key=idempotency_key)
+        question_id = stable_action_id(
+            prefix="gap",
             project_id=project_id,
-            gap=body,
-            created_by=principal.email,
+            request_id=request_id,
+        )
+        return _api_call(
+            lambda: application.create_project_question(
+                project_id,
+                body,
+                principal=principal,
+                question_id=question_id,
+            )
         )
 
     @router.post(
         "/projects/{project_id}/questions/{question_id}/notification",
     )
-    def resend_question_notification(
+    def resend_question_email(
         project_id: str,
         question_id: str,
+        idempotency_key: IdempotencyKey = None,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        if not principal.is_admin:
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can resend expert notifications",
+        request_id = _required_request_id(idempotency_key=idempotency_key)
+        return _api_call(
+            lambda: application.resend_question_email(
+                project_id,
+                question_id,
+                principal=principal,
+                request_id=request_id,
             )
-        try:
-            return container.questions.resend_question(
-                project_id=project_id,
-                question_id=question_id,
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        )
 
     @router.get("/questions/assigned")
-    def list_assigned_questions(
+    def list_my_assigned_questions(
         include_resolved: bool = False,
         principal: Principal = principal_default,
     ) -> list[dict[str, Any]]:
-        return container.repository.list_assigned_questions(
-            principal.email,
-            include_resolved=include_resolved,
+        return _api_call(
+            lambda: application.list_my_assigned_questions(
+                principal=principal,
+                include_resolved=include_resolved,
+            )
         )
 
     @router.get("/projects/{project_id}/questions/{question_id}")
-    def get_question(
+    def get_project_question(
         project_id: str,
         question_id: str,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        question = container.repository.get_question(
-            project_id=project_id,
-            question_id=question_id,
-        )
-        if question is None:
-            raise HTTPException(status_code=404, detail="Question not found")
-        if (
-            not principal.is_admin
-            and question["assigned_expert_email"] != principal.email
-        ):
-            raise HTTPException(
-                status_code=403, detail="Question is not assigned to you"
+        return _api_call(
+            lambda: application.get_project_question(
+                project_id,
+                question_id,
+                principal=principal,
             )
-        return question
+        )
+
+    @router.get(
+        "/projects/{project_id}/questions/{question_id}/answers",
+    )
+    def list_question_answers(
+        project_id: str,
+        question_id: str,
+        principal: Principal = principal_default,
+    ) -> list[dict[str, Any]]:
+        return _api_call(
+            lambda: application.list_question_answers(
+                project_id,
+                question_id,
+                principal=principal,
+            )
+        )
 
     @router.post(
         "/projects/{project_id}/questions/{question_id}/answers",
         status_code=status.HTTP_202_ACCEPTED,
     )
-    def answer_question(
+    def submit_question_answer(
         project_id: str,
         question_id: str,
         body: AnswerSubmit,
+        idempotency_key: IdempotencyKey = None,
         principal: Principal = principal_default,
     ) -> dict[str, Any]:
-        question = container.repository.get_question(
-            project_id=project_id,
-            question_id=question_id,
+        request_id = _required_request_id(
+            body_request_id=body.request_id,
+            idempotency_key=idempotency_key,
         )
-        if question is None:
-            raise HTTPException(status_code=404, detail="Question not found")
-        if (
-            not principal.is_admin
-            and question["assigned_expert_email"] != principal.email
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Only the assigned expert or an administrator can answer",
+        answer_id = stable_action_id(
+            prefix="ans",
+            project_id=project_id,
+            request_id=f"{question_id}:{request_id}",
+        )
+        return _api_call(
+            lambda: application.submit_question_answer(
+                project_id,
+                question_id,
+                body,
+                principal=principal,
+                answer_id=answer_id,
             )
-        try:
-            return container.repository.submit_answer(
-                project_id=project_id,
-                question_id=question_id,
-                answer=body.answer,
-                answered_by=principal.email,
+        )
+
+    @router.post(
+        "/projects/{project_id}/questions/{question_id}/answers/"
+        "{answer_id}/human-review",
+    )
+    def review_question_answer(
+        project_id: str,
+        question_id: str,
+        answer_id: str,
+        body: HumanAnswerReviewRequest,
+        idempotency_key: IdempotencyKey = None,
+        principal: Principal = principal_default,
+    ) -> dict[str, Any]:
+        request_id = _required_request_id(idempotency_key=idempotency_key)
+        return _api_call(
+            lambda: application.review_question_answer(
+                project_id,
+                question_id,
+                answer_id,
+                body,
+                principal=principal,
+                request_id=request_id,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        )
 
     return router
 
 
-def _question_for_answer_token(
-    container: ServiceContainer,
-    answer_token: str,
-) -> dict[str, Any]:
-    question = container.repository.get_question_by_reply_token(answer_token)
-    if question is None:
-        raise HTTPException(
-            status_code=404,
-            detail="This answer link is invalid or no longer available",
-        )
-    return question
-
-
-def _public_question_response(
-    question: dict[str, Any],
-) -> PublicQuestionResponse:
-    status_value = str(question["status"])
-    return PublicQuestionResponse(
-        project_name=str(question["project_name"]),
-        question=str(question["question"]),
-        context=(str(question["context"]) if question.get("context") else None),
-        priority=str(question.get("priority") or "normal"),
-        status=status_value,
-        review_rationale=(
-            str(question["review_rationale"])
-            if question.get("review_rationale")
-            else None
-        ),
-        can_answer=status_value != "RESOLVED",
-    )
-
-
-def _require_project(container: ServiceContainer, project_id: str) -> None:
-    if container.repository.get_project(project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-
-def _suffix(filename: str) -> str:
-    index = filename.rfind(".")
-    return filename[index:].casefold() if index >= 0 else ""
-
-
 def _search_text_preview(
-    text: str, max_characters: int = 900
+    text: str,
+    *,
+    limit: int = 1600,
 ) -> tuple[str, bool]:
     normalized = text.strip()
-    if len(normalized) <= max_characters:
+    if len(normalized) <= limit:
         return normalized, False
-    return normalized[:max_characters].rstrip() + "…", True
+    return normalized[:limit].rstrip() + "…", True

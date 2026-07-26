@@ -11,7 +11,7 @@ Markdown for this project:
 
 1. Call `list_project_documents` for the project and confirm that the relevant
    documents are `READY`.
-2. Run several focused `search_knowledge` calls covering the client or project
+2. Run several focused `search_project_knowledge` calls covering the client or project
    context, challenge, solution, delivery and technology, key features, and
    outcomes. Use `top_k=10` to `20` for this broad research.
 3. Search results are previews. Use `get_document_text` for every document that

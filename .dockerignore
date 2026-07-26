@@ -7,6 +7,10 @@ __pycache__
 .ruff_cache
 cdk.out
 cdk-outputs.json
+data
+output
+PIH - Dataset
+text_extraction
 tests
 README.md
 Makefile

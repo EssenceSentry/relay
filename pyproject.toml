@@ -1,6 +1,6 @@
 [project]
 name = "relay"
-version = "0.2.0"
+version = "1.0.0"
 description = "An agent-native project knowledge system that retrieves grounded evidence, identifies missing knowledge, asks the right expert, and turns their reply into reusable organizational memory"
 requires-python = ">=3.12,<3.14"
 dependencies = [

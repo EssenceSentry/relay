@@ -3,23 +3,39 @@ from __future__ import annotations
 import hashlib
 import secrets
 from decimal import Decimal
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import boto3
-from boto3.dynamodb.conditions import Key
-from boto3.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.conditions import Attr, Key
+from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import ClientError
-from mypy_boto3_dynamodb.service_resource import (
-    DynamoDBServiceResource,
-    Table,
-)
 
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.service_resource import (
+        DynamoDBServiceResource,
+        Table,
+    )
+    from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
+
+from knowledge_core.identity import (
+    candidate_surname,
+    is_blend_email,
+    normalize_email,
+    normalize_name_tokens,
+)
 from knowledge_core.ids import new_id
 from knowledge_core.models import (
     AnswerStatus,
+    ContributorCandidate,
     DocumentStatus,
+    InvitationStatus,
     KnowledgeGapCreate,
+    MembershipRole,
+    MembershipSource,
+    NameMatchResult,
+    NotificationKind,
     NotificationStatus,
+    ProjectStatus,
     QuestionStatus,
     VerifiedFactCreate,
 )
@@ -36,6 +52,26 @@ def _question_sk(question_id: str) -> str:
 
 def _answer_sk(question_id: str, answer_id: str) -> str:
     return f"QUESTION#{question_id}#ANSWER#{answer_id}"
+
+
+def _user_pk(email: str) -> str:
+    return f"USER#{normalize_email(email)}"
+
+
+def _membership_sk(email: str) -> str:
+    return f"MEMBER#{normalize_email(email)}"
+
+
+def _invitation_sk(invitation_id: str) -> str:
+    return f"INVITATION#{invitation_id}"
+
+
+def _notification_sk(notification_id: str) -> str:
+    return f"NOTIFICATION#{notification_id}"
+
+
+def _suppression_sk(email: str) -> str:
+    return f"SUPPRESSION#{normalize_email(email)}"
 
 
 def _reply_pk(reply_token: str) -> str:
@@ -70,6 +106,20 @@ def _dynamo(value: object) -> Any:
     if isinstance(value, list):
         return [_dynamo(item) for item in cast(list[object], value)]
     return value
+
+
+def _serialized(value: object) -> dict[str, Any]:
+    serialized = TypeSerializer().serialize(_dynamo(value))
+    return cast(dict[str, Any], serialized)
+
+
+def _serialized_item(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {key: _serialized(value) for key, value in item.items()}
+
+
+def _stable_identifier(prefix: str, *values: str) -> str:
+    digest = hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}_{digest}"
 
 
 def deserialize_stream_image(image: dict[str, Any]) -> dict[str, Any]:
@@ -108,6 +158,7 @@ class KnowledgeRepository:
             "name": name.strip(),
             "description": (description or "").strip() or None,
             "created_by": created_by,
+            "status": ProjectStatus.ACTIVE.value,
             "created_at": now,
             "updated_at": now,
         }
@@ -117,6 +168,14 @@ class KnowledgeRepository:
             },
             ConditionExpression="attribute_not_exists(PK)",
         )
+        if is_blend_email(created_by):
+            self.ensure_project_membership(
+                project_id=project_id,
+                email=created_by,
+                role=MembershipRole.AUTHOR,
+                source=MembershipSource.PROJECT_AUTHOR,
+                created_by=created_by,
+            )
         return item
 
     def get_project(self, project_id: str) -> dict[str, Any] | None:
@@ -133,14 +192,1196 @@ class KnowledgeRepository:
             raise KeyError(f"Project {project_id!r} does not exist")
         return project
 
-    def list_projects(self, limit: int = 100) -> list[dict[str, Any]]:
+    def rename_project(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        updated_by: str,
+    ) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if len(normalized_name) < 2:
+            raise ValueError("Project name must contain at least 2 characters")
+        try:
+            response = self._table.update_item(
+                Key={"PK": _project_pk(project_id), "SK": "META"},
+                UpdateExpression=(
+                    "SET #name = :name, updated_at = :updated_at, "
+                    "updated_by = :updated_by"
+                ),
+                ConditionExpression=(
+                    "attribute_exists(PK) AND attribute_exists(SK)"
+                ),
+                ExpressionAttributeNames={"#name": "name"},
+                ExpressionAttributeValues={
+                    ":name": normalized_name,
+                    ":updated_at": utc_now_iso(),
+                    ":updated_by": updated_by,
+                },
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                raise KeyError(
+                    f"Project {project_id!r} does not exist"
+                ) from exc
+            raise
+        return _plain(response["Attributes"])
+
+    def list_projects(
+        self,
+        limit: int = 1000,
+        *,
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        projects: list[dict[str, Any]] = []
+        exclusive_start_key: dict[str, Any] | None = None
+        while len(projects) < limit:
+            kwargs: dict[str, Any] = {
+                "IndexName": "GSI1",
+                "KeyConditionExpression": Key("GSI1PK").eq("ENTITY#PROJECT"),
+                "ScanIndexForward": False,
+                "Limit": min(100, limit - len(projects)),
+            }
+            if exclusive_start_key is not None:
+                kwargs["ExclusiveStartKey"] = exclusive_start_key
+            response = self._table.query(**kwargs)
+            projects.extend(_plain(item) for item in response.get("Items", []))
+            raw_last_key = response.get("LastEvaluatedKey")
+            if not isinstance(raw_last_key, dict) or not raw_last_key:
+                break
+            exclusive_start_key = raw_last_key
+        if not include_archived:
+            projects = [
+                project
+                for project in projects
+                if project.get("status", ProjectStatus.ACTIVE.value)
+                == ProjectStatus.ACTIVE.value
+            ]
+        return projects[:limit]
+
+    def set_project_archived(
+        self,
+        *,
+        project_id: str,
+        archived: bool,
+        updated_by: str,
+    ) -> dict[str, Any]:
+        project_status = (
+            ProjectStatus.ARCHIVED if archived else ProjectStatus.ACTIVE
+        )
+        try:
+            response = self._table.update_item(
+                Key={"PK": _project_pk(project_id), "SK": "META"},
+                UpdateExpression=(
+                    "SET #status = :status, updated_at = :updated, "
+                    "updated_by = :updated_by"
+                ),
+                ConditionExpression=(
+                    "attribute_exists(PK) AND attribute_exists(SK)"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":status": project_status.value,
+                    ":updated": utc_now_iso(),
+                    ":updated_by": updated_by,
+                },
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                raise KeyError(
+                    f"Project {project_id!r} does not exist"
+                ) from exc
+            raise
+        return _plain(response["Attributes"])
+
+    def put_user_profile(
+        self,
+        *,
+        subject: str,
+        email: str,
+        display_name: str,
+        identity_source: str,
+        email_verified: bool,
+    ) -> dict[str, Any]:
+        normalized_email = normalize_email(email)
+        if not email_verified:
+            raise ValueError("A user profile requires a verified email")
+        now = utc_now_iso()
+        item = {
+            "PK": _user_pk(normalized_email),
+            "SK": "META",
+            "GSI1PK": "ENTITY#USER",
+            "GSI1SK": normalized_email,
+            "entity_type": "USER_PROFILE",
+            "subject": subject,
+            "email": normalized_email,
+            "display_name": display_name.strip() or normalized_email,
+            "identity_source": identity_source,
+            "email_verified": True,
+            "updated_at": now,
+        }
+        self._table.put_item(Item=item)
+        memberships = self._table.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(
+                f"USER#{normalized_email}"
+            ),
+        )
+        for membership in memberships.get("Items", []):
+            if membership.get("entity_type") != "PROJECT_MEMBERSHIP":
+                continue
+            self._table.update_item(
+                Key={"PK": membership["PK"], "SK": membership["SK"]},
+                UpdateExpression=(
+                    "SET user_subject = :subject, updated_at = :updated"
+                ),
+                ExpressionAttributeValues={
+                    ":subject": subject,
+                    ":updated": now,
+                },
+            )
+        return item
+
+    def get_user_profile(self, email: str) -> dict[str, Any] | None:
+        response = self._table.get_item(
+            Key={"PK": _user_pk(email), "SK": "META"},
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        return _plain(item) if item else None
+
+    def list_user_profiles(self, limit: int = 1000) -> list[dict[str, Any]]:
         response = self._table.query(
             IndexName="GSI1",
-            KeyConditionExpression=Key("GSI1PK").eq("ENTITY#PROJECT"),
-            ScanIndexForward=False,
+            KeyConditionExpression=Key("GSI1PK").eq("ENTITY#USER"),
             Limit=limit,
         )
-        return [_plain(item) for item in response.get("Items", [])]
+        return [
+            _plain(item)
+            for item in response.get("Items", [])
+            if item.get("entity_type") == "USER_PROFILE"
+        ]
+
+    def ensure_project_membership(
+        self,
+        *,
+        project_id: str,
+        email: str,
+        role: MembershipRole,
+        source: MembershipSource,
+        created_by: str,
+        user_subject: str | None = None,
+        evidence: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        normalized_email = normalize_email(email)
+        if user_subject is None:
+            profile = self.get_user_profile(normalized_email)
+            if profile is not None and profile.get("subject"):
+                user_subject = str(profile["subject"])
+        suppression: dict[str, Any] | None = None
+        if source in {
+            MembershipSource.DOCUMENT_EXACT_EMAIL,
+            MembershipSource.DOCUMENT_NAME_MATCH,
+        }:
+            suppression = self.get_collaborator_suppression(
+                project_id=project_id,
+                email=normalized_email,
+            )
+            if suppression is not None and (
+                suppression.get("reason") == "MEMBERSHIP_REMOVED"
+                or source == MembershipSource.DOCUMENT_NAME_MATCH
+            ):
+                return suppression, False
+
+        now = utc_now_iso()
+        item = {
+            "PK": _project_pk(project_id),
+            "SK": _membership_sk(normalized_email),
+            "GSI1PK": f"USER#{normalized_email}",
+            "GSI1SK": f"MEMBERSHIP#{project_id}",
+            "entity_type": "PROJECT_MEMBERSHIP",
+            "project_id": project_id,
+            "email": normalized_email,
+            "user_subject": user_subject,
+            "role": role.value,
+            "source": source.value,
+            "evidence": evidence,
+            "created_by": created_by,
+            "created_at": now,
+            "updated_at": now,
+        }
+        clean_item = {
+            key: value for key, value in item.items() if value is not None
+        }
+        automatic_source = source in {
+            MembershipSource.DOCUMENT_EXACT_EMAIL,
+            MembershipSource.DOCUMENT_NAME_MATCH,
+        }
+        try:
+            if automatic_source:
+                suppression_key = _serialized_item(
+                    {
+                        "PK": _project_pk(project_id),
+                        "SK": _suppression_sk(normalized_email),
+                    }
+                )
+                suppression_guard: TransactWriteItemTypeDef
+                if (
+                    source == MembershipSource.DOCUMENT_EXACT_EMAIL
+                    and suppression is not None
+                    and suppression.get("reason") == "INVITATION_DECLINED"
+                ):
+                    suppression_guard = {
+                        "Delete": {
+                            "TableName": self._table.name,
+                            "Key": suppression_key,
+                            "ConditionExpression": "#reason = :declined",
+                            "ExpressionAttributeNames": {
+                                "#reason": "reason"
+                            },
+                            "ExpressionAttributeValues": _serialized_item(
+                                {":declined": "INVITATION_DECLINED"}
+                            ),
+                        }
+                    }
+                else:
+                    suppression_guard = {
+                        "ConditionCheck": {
+                            "TableName": self._table.name,
+                            "Key": suppression_key,
+                            "ConditionExpression": "attribute_not_exists(PK)",
+                        }
+                    }
+                transaction: list[TransactWriteItemTypeDef] = [
+                    suppression_guard,
+                    {
+                        "Put": {
+                            "TableName": self._table.name,
+                            "Item": _serialized_item(clean_item),
+                            "ConditionExpression": "attribute_not_exists(SK)",
+                        }
+                    },
+                ]
+                self._table.meta.client.transact_write_items(
+                    TransactItems=transaction
+                )
+            else:
+                self._table.put_item(
+                    Item=clean_item,
+                    ConditionExpression="attribute_not_exists(SK)",
+                )
+        except ClientError as exc:
+            expected_codes = (
+                {"TransactionCanceledException"}
+                if automatic_source
+                else {"ConditionalCheckFailedException"}
+            )
+            if exc.response.get("Error", {}).get("Code") not in expected_codes:
+                raise
+            suppression = self.get_collaborator_suppression(
+                project_id=project_id,
+                email=normalized_email,
+            )
+            if suppression is not None and (
+                suppression.get("reason") == "MEMBERSHIP_REMOVED"
+                or source == MembershipSource.DOCUMENT_NAME_MATCH
+            ):
+                return suppression, False
+            existing = self.get_project_membership(
+                project_id=project_id,
+                email=normalized_email,
+            )
+            if existing is None:
+                raise
+            return existing, False
+        return clean_item, True
+
+    def get_project_membership(
+        self,
+        *,
+        project_id: str,
+        email: str,
+    ) -> dict[str, Any] | None:
+        if not is_blend_email(email):
+            return None
+        response = self._table.get_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": _membership_sk(email),
+            },
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        return _plain(item) if item else None
+
+    def is_project_member(self, *, project_id: str, email: str) -> bool:
+        project = self.get_project(project_id)
+        if project is None:
+            return False
+        normalized = email.strip().casefold()
+        if str(project.get("created_by", "")).strip().casefold() == normalized:
+            return True
+        membership = self.get_project_membership(
+            project_id=project_id,
+            email=normalized,
+        )
+        return bool(
+            membership
+            and membership.get("entity_type") == "PROJECT_MEMBERSHIP"
+        )
+
+    def list_project_members(
+        self,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        response = self._table.query(
+            KeyConditionExpression=(
+                Key("PK").eq(_project_pk(project_id))
+                & Key("SK").begins_with("MEMBER#")
+            ),
+        )
+        members = [
+            _plain(item)
+            for item in response.get("Items", [])
+            if item.get("entity_type") == "PROJECT_MEMBERSHIP"
+        ]
+        project = self.get_project(project_id)
+        created_by = (
+            str(project.get("created_by") or "")
+            if project is not None
+            else ""
+        )
+        if is_blend_email(created_by) and all(
+            member.get("email") != created_by.casefold()
+            for member in members
+        ):
+            assert project is not None
+            members.append(
+                {
+                    "entity_type": "PROJECT_MEMBERSHIP",
+                    "project_id": project_id,
+                    "email": created_by.casefold(),
+                    "role": MembershipRole.AUTHOR.value,
+                    "source": MembershipSource.PROJECT_AUTHOR.value,
+                    "created_by": created_by.casefold(),
+                    "created_at": project.get("created_at"),
+                    "updated_at": project.get("updated_at"),
+                }
+            )
+        return sorted(
+            members,
+            key=lambda item: (str(item.get("role")), str(item.get("email"))),
+        )
+
+    def remove_project_member(
+        self,
+        *,
+        project_id: str,
+        email: str,
+        removed_by: str,
+    ) -> dict[str, Any]:
+        project = self.require_project(project_id)
+        if (
+            str(project.get("created_by") or "").strip().casefold()
+            == email.strip().casefold()
+        ):
+            raise ValueError("The project author cannot be removed")
+        membership = self.get_project_membership(
+            project_id=project_id,
+            email=email,
+        )
+        if membership is None:
+            raise KeyError(f"{email!r} is not a project collaborator")
+        if membership.get("role") == MembershipRole.AUTHOR.value:
+            raise ValueError("The project author cannot be removed")
+        if membership.get("source") in {
+            MembershipSource.DOCUMENT_EXACT_EMAIL.value,
+            MembershipSource.DOCUMENT_NAME_MATCH.value,
+        }:
+            now = utc_now_iso()
+            suppression = {
+                "PK": _project_pk(project_id),
+                "SK": _suppression_sk(email),
+                "entity_type": "COLLABORATOR_SUPPRESSION",
+                "project_id": project_id,
+                "email": normalize_email(email),
+                "source": membership["source"],
+                "reason": "MEMBERSHIP_REMOVED",
+                "removed_by": removed_by,
+                "created_at": now,
+                "updated_at": now,
+            }
+            transaction: list[TransactWriteItemTypeDef] = [
+                {
+                    "Delete": {
+                        "TableName": self._table.name,
+                        "Key": _serialized_item(
+                            {
+                                "PK": _project_pk(project_id),
+                                "SK": _membership_sk(email),
+                            }
+                        ),
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": self._table.name,
+                        "Item": _serialized_item(suppression),
+                    }
+                },
+            ]
+            self._table.meta.client.transact_write_items(
+                TransactItems=transaction
+            )
+        else:
+            self._table.delete_item(
+                Key={
+                    "PK": _project_pk(project_id),
+                    "SK": _membership_sk(email),
+                }
+            )
+        return membership
+
+    def get_collaborator_suppression(
+        self,
+        *,
+        project_id: str,
+        email: str,
+    ) -> dict[str, Any] | None:
+        response = self._table.get_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": _suppression_sk(email),
+            },
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        return _plain(item) if item is not None else None
+
+    def clear_collaborator_suppression(
+        self,
+        *,
+        project_id: str,
+        email: str,
+    ) -> None:
+        self._table.delete_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": _suppression_sk(email),
+            }
+        )
+
+    def create_collaboration_invitation(
+        self,
+        *,
+        project_id: str,
+        email: str,
+        source: MembershipSource,
+        invited_by: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        normalized_email = normalize_email(email)
+        if source == MembershipSource.DOCUMENT_NAME_MATCH:
+            suppression = self.get_collaborator_suppression(
+                project_id=project_id,
+                email=normalized_email,
+            )
+            if suppression is not None:
+                return suppression, False
+        invitation_id = _stable_identifier(
+            "invite",
+            project_id,
+            normalized_email,
+            source.value,
+        )
+        now = utc_now_iso()
+        item = {
+            "PK": _user_pk(normalized_email),
+            "SK": _invitation_sk(invitation_id),
+            "GSI1PK": _project_pk(project_id),
+            "GSI1SK": f"INVITATION#{now}#{invitation_id}",
+            "entity_type": "COLLABORATION_INVITATION",
+            "invitation_id": invitation_id,
+            "project_id": project_id,
+            "email": normalized_email,
+            "source": source.value,
+            "status": InvitationStatus.PENDING.value,
+            "evidence": evidence,
+            "invited_by": invited_by,
+            "created_at": now,
+            "updated_at": now,
+        }
+        clean_item = {
+            key: value for key, value in item.items() if value is not None
+        }
+        try:
+            self._table.put_item(
+                Item=clean_item,
+                ConditionExpression="attribute_not_exists(SK)",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+            existing = self.get_collaboration_invitation(
+                email=normalized_email,
+                invitation_id=invitation_id,
+            )
+            if existing is None:
+                raise
+            return existing, False
+        return clean_item, True
+
+    def get_collaboration_invitation(
+        self,
+        *,
+        email: str,
+        invitation_id: str,
+    ) -> dict[str, Any] | None:
+        response = self._table.get_item(
+            Key={
+                "PK": _user_pk(email),
+                "SK": _invitation_sk(invitation_id),
+            },
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        return _plain(item) if item else None
+
+    def list_collaboration_invitations(
+        self,
+        *,
+        email: str,
+        include_decided: bool = False,
+    ) -> list[dict[str, Any]]:
+        response = self._table.query(
+            KeyConditionExpression=(
+                Key("PK").eq(_user_pk(email))
+                & Key("SK").begins_with("INVITATION#")
+            ),
+        )
+        invitations = [
+            _plain(item)
+            for item in response.get("Items", [])
+            if item.get("entity_type") == "COLLABORATION_INVITATION"
+        ]
+        if not include_decided:
+            invitations = [
+                item
+                for item in invitations
+                if item.get("status") == InvitationStatus.PENDING.value
+            ]
+        return sorted(
+            invitations,
+            key=lambda item: str(item.get("created_at", "")),
+            reverse=True,
+        )
+
+    def decide_collaboration_invitation(
+        self,
+        *,
+        email: str,
+        invitation_id: str,
+        accepted: bool,
+        user_subject: str,
+    ) -> dict[str, Any]:
+        normalized_email = normalize_email(email)
+        invitation = self.get_collaboration_invitation(
+            email=normalized_email,
+            invitation_id=invitation_id,
+        )
+        if invitation is None:
+            raise KeyError(f"Invitation {invitation_id!r} does not exist")
+        target_status = (
+            InvitationStatus.ACCEPTED
+            if accepted
+            else InvitationStatus.DECLINED
+        )
+        current_status = str(invitation.get("status"))
+        if current_status == target_status.value:
+            return invitation
+        if current_status != InvitationStatus.PENDING.value:
+            raise ValueError("This invitation has already been decided")
+
+        now = utc_now_iso()
+        project_id = str(invitation["project_id"])
+        already_member = accepted and self.is_project_member(
+            project_id=project_id,
+            email=normalized_email,
+        )
+        transaction: list[TransactWriteItemTypeDef] = [
+            {
+                "Update": {
+                    "TableName": self._table.name,
+                    "Key": _serialized_item(
+                        {
+                            "PK": _user_pk(normalized_email),
+                            "SK": _invitation_sk(invitation_id),
+                        }
+                    ),
+                    "UpdateExpression": (
+                        "SET #status = :status, decided_at = :now, "
+                        "updated_at = :now, decided_by = :email"
+                    ),
+                    "ConditionExpression": "#status = :pending",
+                    "ExpressionAttributeNames": {"#status": "status"},
+                    "ExpressionAttributeValues": _serialized_item(
+                        {
+                            ":status": target_status.value,
+                            ":pending": InvitationStatus.PENDING.value,
+                            ":now": now,
+                            ":email": normalized_email,
+                        }
+                    ),
+                }
+            }
+        ]
+        if accepted and not already_member:
+            membership = {
+                "PK": _project_pk(project_id),
+                "SK": _membership_sk(normalized_email),
+                "GSI1PK": f"USER#{normalized_email}",
+                "GSI1SK": f"MEMBERSHIP#{project_id}",
+                "entity_type": "PROJECT_MEMBERSHIP",
+                "project_id": project_id,
+                "email": normalized_email,
+                "user_subject": user_subject,
+                "role": MembershipRole.COLLABORATOR.value,
+                "source": str(invitation["source"]),
+                "evidence": invitation.get("evidence"),
+                "created_by": str(invitation["invited_by"]),
+                "created_at": now,
+                "updated_at": now,
+            }
+            transaction.extend(
+                [
+                    {
+                        "Put": {
+                            "TableName": self._table.name,
+                            "Item": _serialized_item(
+                                {
+                                    key: value
+                                    for key, value in membership.items()
+                                    if value is not None
+                                }
+                            ),
+                            "ConditionExpression": (
+                                "attribute_not_exists(PK) AND "
+                                "attribute_not_exists(SK)"
+                            ),
+                        }
+                    },
+                    {
+                        "Delete": {
+                            "TableName": self._table.name,
+                            "Key": _serialized_item(
+                                {
+                                    "PK": _project_pk(project_id),
+                                    "SK": _suppression_sk(normalized_email),
+                                }
+                            ),
+                        }
+                    },
+                ]
+            )
+        elif accepted:
+            transaction.append(
+                {
+                    "Delete": {
+                        "TableName": self._table.name,
+                        "Key": _serialized_item(
+                            {
+                                "PK": _project_pk(project_id),
+                                "SK": _suppression_sk(normalized_email),
+                            }
+                        ),
+                    }
+                }
+            )
+        elif (
+            invitation.get("source")
+            == MembershipSource.DOCUMENT_NAME_MATCH.value
+        ):
+            transaction.append(
+                {
+                    "Put": {
+                        "TableName": self._table.name,
+                        "Item": _serialized_item(
+                            {
+                                "PK": _project_pk(project_id),
+                                "SK": _suppression_sk(normalized_email),
+                                "entity_type": "COLLABORATOR_SUPPRESSION",
+                                "project_id": project_id,
+                                "email": normalized_email,
+                                "source": invitation["source"],
+                                "reason": "INVITATION_DECLINED",
+                                "removed_by": normalized_email,
+                                "created_at": now,
+                                "updated_at": now,
+                            }
+                        ),
+                    }
+                }
+            )
+        self._table.meta.client.transact_write_items(
+            TransactItems=transaction
+        )
+        decided = self.get_collaboration_invitation(
+            email=normalized_email,
+            invitation_id=invitation_id,
+        )
+        if decided is None:
+            raise RuntimeError("Invitation disappeared after being decided")
+        return decided
+
+    def create_notification(
+        self,
+        *,
+        email: str,
+        kind: NotificationKind,
+        title: str,
+        message: str,
+        project_id: str | None,
+        action_url: str | None,
+        send_email: bool,
+        data: dict[str, Any] | None = None,
+        notification_id: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        normalized_email = normalize_email(email)
+        notification_id = notification_id or new_id("notice")
+        now = utc_now_iso()
+        item = {
+            "PK": _user_pk(normalized_email),
+            "SK": _notification_sk(notification_id),
+            "entity_type": "NOTIFICATION",
+            "notification_id": notification_id,
+            "email": normalized_email,
+            "kind": kind.value,
+            "title": title.strip(),
+            "message": message.strip(),
+            "project_id": project_id,
+            "action_url": action_url,
+            "data": data,
+            "delivery_status": (
+                NotificationStatus.PENDING.value
+                if send_email
+                else NotificationStatus.DISABLED.value
+            ),
+            "created_at": now,
+            "updated_at": now,
+        }
+        clean_item = {
+            key: value for key, value in item.items() if value is not None
+        }
+        try:
+            self._table.put_item(
+                Item=clean_item,
+                ConditionExpression="attribute_not_exists(SK)",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+            existing = self.get_notification(
+                email=normalized_email,
+                notification_id=notification_id,
+            )
+            if existing is None:
+                raise
+            return existing, False
+        return clean_item, True
+
+    def get_notification(
+        self,
+        *,
+        email: str,
+        notification_id: str,
+    ) -> dict[str, Any] | None:
+        response = self._table.get_item(
+            Key={
+                "PK": _user_pk(email),
+                "SK": _notification_sk(notification_id),
+            },
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        return _plain(item) if item else None
+
+    def list_notifications(
+        self,
+        *,
+        email: str,
+        unread_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        response = self._table.query(
+            KeyConditionExpression=(
+                Key("PK").eq(_user_pk(email))
+                & Key("SK").begins_with("NOTIFICATION#")
+            ),
+            Limit=limit,
+        )
+        notifications = [
+            _plain(item)
+            for item in response.get("Items", [])
+            if item.get("entity_type") == "NOTIFICATION"
+        ]
+        if unread_only:
+            notifications = [
+                item for item in notifications if not item.get("read_at")
+            ]
+        return sorted(
+            notifications,
+            key=lambda item: str(item.get("created_at", "")),
+            reverse=True,
+        )
+
+    def mark_notification_read(
+        self,
+        *,
+        email: str,
+        notification_id: str,
+    ) -> dict[str, Any]:
+        try:
+            response = self._table.update_item(
+                Key={
+                    "PK": _user_pk(email),
+                    "SK": _notification_sk(notification_id),
+                },
+                UpdateExpression=(
+                    "SET read_at = if_not_exists(read_at, :now), "
+                    "updated_at = :now"
+                ),
+                ConditionExpression="attribute_exists(PK)",
+                ExpressionAttributeValues={":now": utc_now_iso()},
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                raise KeyError(
+                    f"Notification {notification_id!r} does not exist"
+                ) from exc
+            raise
+        return _plain(response["Attributes"])
+
+    def update_notification_delivery(
+        self,
+        *,
+        email: str,
+        notification_id: str,
+        status: NotificationStatus,
+        message_id: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        assignments = [
+            "delivery_status = :status",
+            "updated_at = :updated",
+        ]
+        values: dict[str, Any] = {
+            ":status": status.value,
+            ":updated": utc_now_iso(),
+        }
+        removals: list[str] = []
+        if message_id is not None:
+            assignments.extend(
+                [
+                    "delivery_message_id = :message_id",
+                    "delivery_sent_at = :sent_at",
+                ]
+            )
+            values[":message_id"] = message_id
+            values[":sent_at"] = utc_now_iso()
+            removals.append("delivery_error")
+        if error is not None:
+            assignments.append("delivery_error = :error")
+            values[":error"] = error[:4000]
+        expression = "SET " + ", ".join(assignments)
+        if removals:
+            expression += " REMOVE " + ", ".join(removals)
+        response = self._table.update_item(
+            Key={
+                "PK": _user_pk(email),
+                "SK": _notification_sk(notification_id),
+            },
+            UpdateExpression=expression,
+            ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
+        )
+        return _plain(response["Attributes"])
+
+    def claim_notification_delivery(
+        self,
+        *,
+        email: str,
+        notification_id: str,
+        attempt_id: str,
+    ) -> bool:
+        try:
+            self._table.update_item(
+                Key={
+                    "PK": _user_pk(email),
+                    "SK": _notification_sk(notification_id),
+                },
+                UpdateExpression=(
+                    "SET delivery_status = :processing, "
+                    "delivery_attempt_id = :attempt, updated_at = :updated"
+                ),
+                ConditionExpression="delivery_status = :pending",
+                ExpressionAttributeValues={
+                    ":processing": NotificationStatus.PROCESSING.value,
+                    ":pending": NotificationStatus.PENDING.value,
+                    ":attempt": attempt_id,
+                    ":updated": utc_now_iso(),
+                },
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                return False
+            raise
+        return True
+
+    def reset_notification_delivery(
+        self,
+        *,
+        email: str,
+        notification_id: str,
+        attempt_id: str,
+        error: str,
+    ) -> None:
+        self._table.update_item(
+            Key={
+                "PK": _user_pk(email),
+                "SK": _notification_sk(notification_id),
+            },
+            UpdateExpression=(
+                "SET delivery_status = :pending, delivery_error = :error, "
+                "updated_at = :updated REMOVE delivery_attempt_id"
+            ),
+            ConditionExpression="delivery_attempt_id = :attempt",
+            ExpressionAttributeValues={
+                ":pending": NotificationStatus.PENDING.value,
+                ":error": error[:4000],
+                ":updated": utc_now_iso(),
+                ":attempt": attempt_id,
+            },
+        )
+
+    def put_author_evidence(
+        self,
+        *,
+        project_id: str,
+        document_id: str,
+        document_name: str,
+        candidate: ContributorCandidate,
+        page_number: int | None,
+        locator: str | None,
+        extraction_version: str,
+    ) -> tuple[dict[str, Any], bool]:
+        surname = candidate_surname(candidate.display_name)
+        if surname is None:
+            raise ValueError("Contributor candidates require a full name")
+        normalized_name = " ".join(
+            normalize_name_tokens(candidate.display_name)
+        )
+        name_tokens = list(normalize_name_tokens(candidate.display_name))
+        page_key = str(page_number or 0)
+        evidence_id = _stable_identifier(
+            "author",
+            project_id,
+            document_id,
+            page_key,
+            normalized_name,
+        )
+        now = utc_now_iso()
+        item = {
+            "PK": _project_pk(project_id),
+            "SK": f"AUTHOR#{evidence_id}",
+            "GSI1PK": f"AUTHOR_SURNAME#{surname}",
+            "GSI1SK": f"{project_id}#{document_id}#{page_key}#{evidence_id}",
+            "entity_type": "AUTHOR_EVIDENCE",
+            "evidence_id": evidence_id,
+            "project_id": project_id,
+            "document_id": document_id,
+            "document_name": document_name,
+            "display_name": candidate.display_name,
+            "normalized_name": normalized_name,
+            "name_tokens": name_tokens,
+            "surname": surname,
+            "relationship": candidate.relationship,
+            "confidence": Decimal(str(candidate.confidence)),
+            "evidence": candidate.evidence,
+            "page_number": page_number,
+            "locator": locator,
+            "extraction_version": extraction_version,
+            "created_at": now,
+            "updated_at": now,
+        }
+        clean_item = {
+            key: value for key, value in item.items() if value is not None
+        }
+        try:
+            self._table.put_item(
+                Item=clean_item,
+                ConditionExpression="attribute_not_exists(SK)",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+            return clean_item, False
+        return clean_item, True
+
+    def list_author_evidence(
+        self,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        response = self._table.query(
+            KeyConditionExpression=(
+                Key("PK").eq(_project_pk(project_id))
+                & Key("SK").begins_with("AUTHOR#")
+            ),
+        )
+        return [
+            _plain(item)
+            for item in response.get("Items", [])
+            if item.get("entity_type") == "AUTHOR_EVIDENCE"
+        ]
+
+    def list_author_evidence_by_surname(
+        self,
+        surname: str,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        normalized_tokens = normalize_name_tokens(surname)
+        if len(normalized_tokens) != 1 or limit <= 0:
+            return []
+        token = normalized_tokens[0]
+        evidence: list[dict[str, Any]] = []
+        exclusive_start_key: dict[str, Any] | None = None
+        while len(evidence) < limit:
+            kwargs: dict[str, Any] = {
+                "FilterExpression": (
+                    Attr("entity_type").eq("AUTHOR_EVIDENCE")
+                    & Attr("name_tokens").contains(token)
+                ),
+                "Limit": min(250, limit),
+            }
+            if exclusive_start_key is not None:
+                kwargs["ExclusiveStartKey"] = exclusive_start_key
+            response = self._table.scan(**kwargs)
+            evidence.extend(
+                _plain(item) for item in response.get("Items", [])
+            )
+            raw_last_key = response.get("LastEvaluatedKey")
+            if not isinstance(raw_last_key, dict) or not raw_last_key:
+                break
+            exclusive_start_key = raw_last_key
+        return evidence[:limit]
+
+    def put_name_match_evaluation(
+        self,
+        *,
+        evidence: dict[str, Any],
+        user_profile: dict[str, Any],
+        result: NameMatchResult,
+        matching_model: str,
+        evaluated_by: str,
+    ) -> dict[str, Any]:
+        project_id = str(evidence["project_id"])
+        evidence_id = str(evidence["evidence_id"])
+        email = normalize_email(str(user_profile["email"]))
+        evaluation_id = _stable_identifier(
+            "match",
+            project_id,
+            evidence_id,
+            email,
+            matching_model,
+        )
+        now = utc_now_iso()
+        item = {
+            "PK": _project_pk(project_id),
+            "SK": f"MATCH#{evaluation_id}",
+            "GSI1PK": f"USER#{email}",
+            "GSI1SK": (
+                f"MATCH#{project_id}#{evidence_id}#{evaluation_id}"
+            ),
+            "entity_type": "NAME_MATCH_EVALUATION",
+            "evaluation_id": evaluation_id,
+            "project_id": project_id,
+            "evidence_id": evidence_id,
+            "document_id": evidence["document_id"],
+            "document_name": evidence["document_name"],
+            "candidate_name": evidence["display_name"],
+            "user_email": email,
+            "user_subject": user_profile.get("subject"),
+            "user_display_name": user_profile.get("display_name"),
+            "decision": result.decision.value,
+            "confidence": Decimal(str(result.confidence)),
+            "rationale": result.rationale,
+            "matching_model": matching_model,
+            "evaluated_by": evaluated_by,
+            "extraction_version": evidence["extraction_version"],
+            "created_at": now,
+            "updated_at": now,
+        }
+        clean_item = {
+            key: value for key, value in item.items() if value is not None
+        }
+        self._table.put_item(Item=clean_item)
+        return clean_item
+
+    def record_document_discovery(
+        self,
+        *,
+        project_id: str,
+        document_id: str,
+        blend360_emails: list[str],
+        extraction_version: str,
+    ) -> None:
+        normalized = {normalize_email(email) for email in blend360_emails}
+        assignments = [
+            "contributor_extraction_version = :version",
+            "contributor_extracted_at = :now",
+            "updated_at = :now",
+        ]
+        values: dict[str, Any] = {
+            ":version": extraction_version,
+            ":now": utc_now_iso(),
+        }
+        expression = "SET " + ", ".join(assignments)
+        if normalized:
+            expression += " ADD discovered_blend360_emails :emails"
+            values[":emails"] = normalized
+        self._table.update_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": f"DOCUMENT#{document_id}",
+            },
+            UpdateExpression=expression,
+            ExpressionAttributeValues=values,
+        )
 
     def create_document(
         self,
@@ -156,6 +1397,10 @@ class KnowledgeRepository:
         uploaded_by: str,
         source_type: str = "UPLOADED",
         document_version: str = "1",
+        source_answer_id: str | None = None,
+        source_attachment_id: str | None = None,
+        source_question_id: str | None = None,
+        return_existing: bool = False,
     ) -> dict[str, Any]:
         now = utc_now_iso()
         item = {
@@ -172,15 +1417,36 @@ class KnowledgeRepository:
             "size_bytes": size_bytes,
             "status": status.value,
             "source_type": source_type,
+            "source_answer_id": source_answer_id,
+            "source_attachment_id": source_attachment_id,
+            "source_question_id": source_question_id,
             "uploaded_by": uploaded_by,
             "created_at": now,
             "updated_at": now,
         }
-        self._table.put_item(
-            Item=item,
-            ConditionExpression="attribute_not_exists(SK)",
-        )
-        return item
+        clean_item = {
+            key: value for key, value in item.items() if value is not None
+        }
+        try:
+            self._table.put_item(
+                Item=clean_item,
+                ConditionExpression="attribute_not_exists(SK)",
+            )
+        except ClientError as exc:
+            if (
+                not return_existing
+                or exc.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+            existing = self.get_document(
+                project_id=project_id,
+                document_id=document_id,
+            )
+            if existing is None:
+                raise
+            return existing
+        return clean_item
 
     def put_generated_document(
         self,
@@ -380,8 +1646,10 @@ class KnowledgeRepository:
         question_id = question_id or new_id("gap")
         now = utc_now_iso()
         status = QuestionStatus.OPEN.value
-        email = gap.assigned_expert_email.strip().casefold()
-        reply_token = secrets.token_hex(24) if reply_domain else None
+        email = gap.assigned_expert_email
+        reply_token = (
+            secrets.token_hex(24) if reply_domain and email is not None else None
+        )
         reply_address = (
             f"kg-{reply_token}@{reply_domain.strip().casefold().rstrip('.')}"
             if reply_token and reply_domain
@@ -390,8 +1658,12 @@ class KnowledgeRepository:
         item = {
             "PK": _project_pk(project_id),
             "SK": _question_sk(question_id),
-            "GSI1PK": f"EXPERT#{email}",
-            "GSI1SK": f"{status}#{now}#{project_id}#{question_id}",
+            "GSI1PK": f"EXPERT#{email}" if email is not None else None,
+            "GSI1SK": (
+                f"{status}#{now}#{project_id}#{question_id}"
+                if email is not None
+                else None
+            ),
             "entity_type": "QUESTION",
             "project_id": project_id,
             "project_name": project["name"],
@@ -560,6 +1832,45 @@ class KnowledgeRepository:
             ]
         return items
 
+    def claim_question_email_resend(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+        request_id: str,
+    ) -> bool:
+        """Claim one logical resend while permitting retries after failure."""
+        try:
+            self._table.update_item(
+                Key={
+                    "PK": _project_pk(project_id),
+                    "SK": _question_sk(question_id),
+                },
+                UpdateExpression=(
+                    "SET last_resend_request_id = :request, "
+                    "last_resend_claimed_at = :now, updated_at = :now"
+                ),
+                ConditionExpression=(
+                    "attribute_exists(PK) AND ("
+                    "attribute_not_exists(last_resend_request_id) OR "
+                    "last_resend_request_id <> :request OR "
+                    "notification_status = :failed)"
+                ),
+                ExpressionAttributeValues={
+                    ":request": request_id,
+                    ":failed": NotificationStatus.FAILED.value,
+                    ":now": utc_now_iso(),
+                },
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                return False
+            raise
+        return True
+
     def list_question_answers(
         self,
         *,
@@ -583,6 +1894,25 @@ class KnowledgeRepository:
             key=lambda item: (item.get("created_at", ""), item["answer_id"]),
         )
 
+    def get_question_answer(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+        answer_id: str,
+    ) -> dict[str, Any] | None:
+        response = self._table.get_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": _answer_sk(question_id, answer_id),
+            },
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        if item is None or item.get("entity_type") != "ANSWER":
+            return None
+        return _plain(item)
+
     def submit_answer(
         self,
         *,
@@ -590,6 +1920,10 @@ class KnowledgeRepository:
         question_id: str,
         answer: str,
         answered_by: str,
+        requires_human_review: bool | None = None,
+        source: str = "AUTHENTICATED_API",
+        answer_id: str | None = None,
+        supporting_document_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         question = self.get_question(
             project_id=project_id,
@@ -597,12 +1931,20 @@ class KnowledgeRepository:
         )
         if question is None:
             raise KeyError(f"Question {question_id!r} does not exist")
+        if requires_human_review is None:
+            requires_human_review = not self.is_project_member(
+                project_id=project_id,
+                email=answered_by,
+            )
         return self._put_answer(
             question=question,
-            answer_id=new_id("ans"),
+            answer_id=answer_id or new_id("ans"),
             answer=answer,
             answered_by=answered_by,
-            source="WEB",
+            source=source,
+            supporting_document_ids=supporting_document_ids,
+            return_existing=answer_id is not None,
+            requires_human_review=requires_human_review,
         )
 
     def submit_email_answer(
@@ -615,6 +1957,8 @@ class KnowledgeRepository:
         raw_email_bucket: str,
         raw_email_key: str,
         email_subject: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        attachment_errors: list[str] | None = None,
     ) -> dict[str, Any]:
         question = self.get_question_by_reply_token(reply_token)
         if question is None:
@@ -629,7 +1973,13 @@ class KnowledgeRepository:
             raw_email_bucket=raw_email_bucket,
             raw_email_key=raw_email_key,
             email_subject=email_subject,
+            attachments=attachments,
+            attachment_errors=attachment_errors,
             return_existing=True,
+            requires_human_review=not self.is_project_member(
+                project_id=str(question["project_id"]),
+                email=answered_by,
+            ),
         )
 
     def _put_answer(
@@ -644,7 +1994,11 @@ class KnowledgeRepository:
         raw_email_bucket: str | None = None,
         raw_email_key: str | None = None,
         email_subject: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        attachment_errors: list[str] | None = None,
+        supporting_document_ids: list[str] | None = None,
         return_existing: bool = False,
+        requires_human_review: bool = False,
     ) -> dict[str, Any]:
         project_id = question["project_id"]
         question_id = question["question_id"]
@@ -661,8 +2015,22 @@ class KnowledgeRepository:
                 return _plain(existing)
         if question["status"] == QuestionStatus.RESOLVED.value:
             raise ValueError("This question is already resolved")
+        normalized_answer = answer.strip()
+        normalized_support = list(dict.fromkeys(supporting_document_ids or []))
+        normalized_attachments = attachments or []
+        if (
+            len(normalized_answer) < 3
+            and not normalized_support
+            and not normalized_attachments
+        ):
+            raise ValueError(
+                "An answer must include text or at least one supporting document"
+            )
 
         now = utc_now_iso()
+        waits_for_documents = bool(normalized_attachments) and not (
+            requires_human_review
+        )
         item = {
             "PK": _project_pk(project_id),
             "SK": _answer_sk(question_id, answer_id),
@@ -672,17 +2040,29 @@ class KnowledgeRepository:
             "question_id": question_id,
             "question": question["question"],
             "context": question.get("context"),
-            "assigned_expert_email": question["assigned_expert_email"],
+            "assigned_expert_email": question.get("assigned_expert_email"),
             "reply_address": question.get("reply_address"),
             "answer_id": answer_id,
-            "answer": answer.strip(),
+            "answer": normalized_answer,
             "answered_by": answered_by.strip().casefold(),
             "answer_source": source,
             "source_message_id": source_message_id,
             "raw_email_bucket": raw_email_bucket,
             "raw_email_key": raw_email_key,
             "email_subject": (email_subject or "").strip() or None,
-            "review_status": AnswerStatus.PENDING.value,
+            "attachments": normalized_attachments or None,
+            "attachment_errors": attachment_errors or None,
+            "supporting_document_ids": normalized_support or None,
+            "review_status": (
+                AnswerStatus.PENDING_HUMAN.value
+                if requires_human_review
+                else (
+                    AnswerStatus.WAITING_DOCUMENTS.value
+                    if waits_for_documents
+                    else AnswerStatus.PENDING.value
+                )
+            ),
+            "requires_human_review": requires_human_review,
             "created_at": now,
             "updated_at": now,
         }
@@ -710,6 +2090,162 @@ class KnowledgeRepository:
                 raise
             return _plain(existing)
         return item
+
+    def decide_answer_human_review(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+        answer_id: str,
+        approved: bool,
+        reviewed_by: str,
+        note: str | None,
+    ) -> dict[str, Any]:
+        existing_response = self._table.get_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": _answer_sk(question_id, answer_id),
+            },
+            ConsistentRead=True,
+        )
+        existing_item = existing_response.get("Item")
+        if existing_item is None:
+            raise KeyError(f"Answer {answer_id!r} does not exist")
+        waits_for_documents = bool(existing_item.get("attachments"))
+        target_status = (
+            (
+                AnswerStatus.WAITING_DOCUMENTS
+                if waits_for_documents
+                else AnswerStatus.PENDING
+            )
+            if approved
+            else AnswerStatus.REJECTED
+        )
+        now = utc_now_iso()
+        values: dict[str, Any] = {
+            ":pending_human": AnswerStatus.PENDING_HUMAN.value,
+            ":target": target_status.value,
+            ":reviewed_by": reviewed_by.strip().casefold(),
+            ":reviewed_at": now,
+            ":updated": now,
+        }
+        assignments = [
+            "review_status = :target",
+            "human_reviewed_by = :reviewed_by",
+            "human_reviewed_at = :reviewed_at",
+            "updated_at = :updated",
+        ]
+        if note:
+            assignments.append("human_review_note = :note")
+            values[":note"] = note.strip()
+        try:
+            response = self._table.update_item(
+                Key={
+                    "PK": _project_pk(project_id),
+                    "SK": _answer_sk(question_id, answer_id),
+                },
+                UpdateExpression="SET " + ", ".join(assignments),
+                ConditionExpression="review_status = :pending_human",
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                existing_response = self._table.get_item(
+                    Key={
+                        "PK": _project_pk(project_id),
+                        "SK": _answer_sk(question_id, answer_id),
+                    },
+                    ConsistentRead=True,
+                )
+                existing = existing_response.get("Item")
+                if (
+                    existing is not None
+                    and existing.get("review_status")
+                    == target_status.value
+                ):
+                    return _plain(existing)
+                raise ValueError(
+                    "This answer is no longer awaiting human review"
+                ) from exc
+            raise
+        return _plain(response["Attributes"])
+
+    def update_answer_attachments(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+        answer_id: str,
+        attachments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        response = self._table.update_item(
+            Key={
+                "PK": _project_pk(project_id),
+                "SK": _answer_sk(question_id, answer_id),
+            },
+            UpdateExpression=(
+                "SET attachments = :attachments, updated_at = :updated"
+            ),
+            ExpressionAttributeValues={
+                ":attachments": attachments,
+                ":updated": utc_now_iso(),
+            },
+            ReturnValues="ALL_NEW",
+        )
+        return _plain(response["Attributes"])
+
+    def release_answer_after_documents(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+        answer_id: str,
+        attachment_warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            ":waiting": AnswerStatus.WAITING_DOCUMENTS.value,
+            ":pending": AnswerStatus.PENDING.value,
+            ":updated": utc_now_iso(),
+        }
+        assignments = [
+            "review_status = :pending",
+            "updated_at = :updated",
+        ]
+        if attachment_warnings:
+            assignments.append("attachment_warnings = :warnings")
+            values[":warnings"] = attachment_warnings
+        try:
+            response = self._table.update_item(
+                Key={
+                    "PK": _project_pk(project_id),
+                    "SK": _answer_sk(question_id, answer_id),
+                },
+                UpdateExpression="SET " + ", ".join(assignments),
+                ConditionExpression="review_status = :waiting",
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+            current = self._table.get_item(
+                Key={
+                    "PK": _project_pk(project_id),
+                    "SK": _answer_sk(question_id, answer_id),
+                },
+                ConsistentRead=True,
+            ).get("Item")
+            if current is None:
+                raise KeyError(f"Answer {answer_id!r} does not exist") from exc
+            return _plain(current)
+        return _plain(response["Attributes"])
 
     def update_answer_follow_up_notification(
         self,

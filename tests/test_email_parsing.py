@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from email.message import EmailMessage
+
+import pytest
+
 from knowledge_core.email_parsing import (
     extract_reply_token,
     parse_inbound_email,
@@ -83,3 +87,114 @@ def test_strip_outlook_original_message() -> None:
     assert (
         strip_quoted_reply(body) == "The owner was the Data Platforms practice."
     )
+
+
+def _message_with_headers() -> EmailMessage:
+    message = EmailMessage()
+    message["From"] = "Expert <expert@blend360.com>"
+    message["To"] = "kg-example-token-123@answers.example.com"
+    message["Subject"] = "Re: Project question"
+    return message
+
+
+def test_parse_attachment_only_reply_accepts_supported_document() -> None:
+    message = _message_with_headers()
+    message.add_attachment(
+        b"%PDF-1.7 project evidence",
+        maintype="application",
+        subtype="pdf",
+        filename="Evidence.PDF",
+    )
+
+    parsed = parse_inbound_email(message.as_bytes())
+
+    assert parsed.reply_text == ""
+    assert len(parsed.attachments) == 1
+    attachment = parsed.attachments[0]
+    assert attachment.filename == "Evidence.PDF"
+    assert attachment.content_type == "application/pdf"
+    assert attachment.size_bytes == len(b"%PDF-1.7 project evidence")
+    assert len(attachment.sha256) == 64
+    assert parsed.attachment_errors == ()
+
+
+def test_parse_ignores_inline_signature_image() -> None:
+    message = _message_with_headers()
+    message.set_content("The accountable lead was Priya Shah.")
+    message.add_attachment(
+        b"logo bytes",
+        maintype="image",
+        subtype="png",
+        filename="signature-logo.png",
+        disposition="inline",
+    )
+    message.add_attachment(
+        b"delivery details",
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="Delivery.docx",
+    )
+
+    parsed = parse_inbound_email(message.as_bytes())
+
+    assert [item.filename for item in parsed.attachments] == ["Delivery.docx"]
+    assert parsed.attachment_errors == ()
+
+
+def test_parse_reports_unsupported_and_oversized_attachments() -> None:
+    message = _message_with_headers()
+    message.set_content("See the supporting material.")
+    message.add_attachment(
+        b"binary",
+        maintype="application",
+        subtype="octet-stream",
+        filename="archive.zip",
+    )
+    message.add_attachment(
+        b"123456",
+        maintype="application",
+        subtype="pdf",
+        filename="too-large.pdf",
+    )
+
+    parsed = parse_inbound_email(
+        message.as_bytes(),
+        max_total_attachment_bytes=5,
+    )
+
+    assert parsed.attachments == ()
+    assert "unsupported file type .zip" in parsed.attachment_errors[0]
+    assert "exceed the 5 byte total limit" in parsed.attachment_errors[1]
+
+
+def test_parse_enforces_attachment_count_but_keeps_usable_files() -> None:
+    message = _message_with_headers()
+    message.set_content("Two documents are attached.")
+    for name in ("one.pdf", "two.pdf"):
+        message.add_attachment(
+            name.encode(),
+            maintype="application",
+            subtype="pdf",
+            filename=name,
+        )
+
+    parsed = parse_inbound_email(
+        message.as_bytes(),
+        max_attachment_count=1,
+    )
+
+    assert [item.filename for item in parsed.attachments] == ["one.pdf"]
+    assert "more than 1 attachments" in parsed.attachment_errors[0]
+
+
+def test_parse_rejects_reply_with_no_text_or_supported_attachment() -> None:
+    message = _message_with_headers()
+    message.add_attachment(
+        b"binary",
+        maintype="application",
+        subtype="zip",
+        filename="archive.zip",
+    )
+
+    with pytest.raises(ValueError, match="usable reply text"):
+        parse_inbound_email(message.as_bytes())

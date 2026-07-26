@@ -219,6 +219,7 @@ __marimo__/
 
 # Data
 initial-ingestion-report.json
+document-reassignment-report.json
 domain-contact.json
 scripts/domain-contact.json
 PIH - Dataset/

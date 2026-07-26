@@ -7,7 +7,9 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 import boto3
+from pydantic import TypeAdapter
 
+from knowledge_core.collaboration import CollaborationDiscovery
 from knowledge_core.document_rendering import (
     render_document_as_pdf,
     split_pdf_pages,
@@ -15,7 +17,15 @@ from knowledge_core.document_rendering import (
 from knowledge_core.dynamo import KnowledgeRepository
 from knowledge_core.indexed_documents import build_indexed_document
 from knowledge_core.indexing import DocumentIndexer
-from knowledge_core.models import DocumentStatus, TextSection
+from knowledge_core.models import (
+    DocumentEnhancementResult,
+    DocumentStatus,
+    TextSection,
+)
+from knowledge_core.notifications import (
+    MatchingPublisher,
+    NotificationPublisher,
+)
 from knowledge_core.openai_api import OpenAIService
 from knowledge_core.opensearch import OpenSearchServerlessClient
 from knowledge_core.page_processing import (
@@ -32,6 +42,7 @@ LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)
 _MULTIMODAL_SUFFIXES = {".doc", ".docx", ".pdf", ".pptx"}
 _PAGE_JOB_KIND = "document_page"
+_ATTACHMENT_LIST_ADAPTER = TypeAdapter(list[dict[str, Any]])
 
 _SETTINGS = IngestionSettings.from_env()
 _S3 = boto3.client("s3")
@@ -46,6 +57,19 @@ _SEARCH = OpenSearchServerlessClient(
     region=_SETTINGS.aws_region,
     index_name=_SETTINGS.opensearch_index,
     dimensions=_SETTINGS.embedding_dimensions,
+)
+_DISCOVERY = CollaborationDiscovery(
+    repository=_REPOSITORY,
+    notifications=NotificationPublisher(
+        repository=_REPOSITORY,
+        queue_url=_SETTINGS.notification_queue_url,
+        sqs_client=_SQS,
+    ),
+    matching=MatchingPublisher(
+        queue_url=_SETTINGS.matching_queue_url,
+        sqs_client=_SQS,
+    ),
+    application_base_url=_SETTINGS.application_base_url,
 )
 
 
@@ -153,8 +177,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 def _process_sqs_record(record: dict[str, Any]) -> None:
     body = json.loads(record["body"])
+    receive_count = int(
+        record.get("attributes", {}).get("ApproximateReceiveCount", "1")
+    )
+    final_attempt = receive_count >= 4
     if body.get("kind") == _PAGE_JOB_KIND:
-        _process_page_job(body)
+        _process_page_job(body, final_attempt=final_attempt)
         return
 
     for s3_record in body.get("Records", []):
@@ -162,10 +190,19 @@ def _process_sqs_record(record: dict[str, Any]) -> None:
             continue
         bucket = s3_record["s3"]["bucket"]["name"]
         key = unquote_plus(s3_record["s3"]["object"]["key"])
-        _process_object(bucket=bucket, key=key)
+        _process_object(
+            bucket=bucket,
+            key=key,
+            final_attempt=final_attempt,
+        )
 
 
-def _process_object(*, bucket: str, key: str) -> None:
+def _process_object(
+    *,
+    bucket: str,
+    key: str,
+    final_attempt: bool = False,
+) -> None:
     parts = key.split("/", 3)
     if len(parts) != 4 or parts[0] != "uploads":
         LOGGER.info("Ignoring object outside the upload key scheme: %s", key)
@@ -222,11 +259,13 @@ def _process_object(*, bucket: str, key: str) -> None:
                 )
                 return
 
-            markdown = openai.enhance_document_markdown(
+            extracted_text = _serialize_sections(deterministic)
+            enhancement = openai.enhance_document(
                 filename=filename,
                 rendered_pdf=rendered_pdf,
-                extracted_text=_serialize_sections(deterministic),
+                extracted_text=extracted_text,
             )
+            markdown = enhancement.markdown
             reference = original_file_reference(
                 filename=filename,
                 bucket=bucket,
@@ -243,10 +282,24 @@ def _process_object(*, bucket: str, key: str) -> None:
             enhanced_markdown: str | None = markdown
         else:
             sections = parse_document(data, filename)
+            if not sections:
+                raise ValueError(
+                    "No searchable content was found in the document"
+                )
             enhanced_markdown = None
+            extracted_text = _serialize_sections(sections)
+            enhancement = DocumentEnhancementResult(
+                markdown=extracted_text,
+            )
 
-        if not sections:
-            raise ValueError("No searchable content was found in the document")
+        _DISCOVERY.record_document_enhancement(
+            project_id=project_id,
+            document_id=document_id,
+            document_name=str(document["document_name"]),
+            extracted_text=extracted_text,
+            result=enhancement,
+            locator="enhanced document" if use_multimodal else "document",
+        )
         _index_complete_document(
             bucket=bucket,
             key=key,
@@ -258,12 +311,14 @@ def _process_object(*, bucket: str, key: str) -> None:
             openai=openai or _openai_service(),
         )
     except Exception as exc:
-        _REPOSITORY.update_document_status(
+        failed = _REPOSITORY.update_document_status(
             project_id=project_id,
             document_id=document_id,
             status=DocumentStatus.FAILED,
             error=f"{type(exc).__name__}: {exc}",
         )
+        if final_attempt:
+            _release_attachment_answer(failed)
         raise
 
 
@@ -312,12 +367,13 @@ def _index_complete_document(
         enhanced_s3_key=enhanced_key,
     )
     _indexer(openai).index_document(indexed_document)
-    _REPOSITORY.update_document_status(
+    ready = _REPOSITORY.update_document_status(
         project_id=project_id,
         document_id=document_id,
         status=DocumentStatus.READY,
         enhanced_s3_key=enhanced_key,
     )
+    _release_attachment_answer(ready)
     LOGGER.info("Indexed complete document %s", document_id)
 
 
@@ -418,7 +474,11 @@ def _send_page_jobs(jobs: list[dict[str, Any]]) -> None:
             raise RuntimeError(f"Failed to enqueue page jobs: {failures}")
 
 
-def _process_page_job(job: dict[str, Any]) -> None:
+def _process_page_job(
+    job: dict[str, Any],
+    *,
+    final_attempt: bool = False,
+) -> None:
     project_id = str(job["project_id"])
     document_id = str(job["document_id"])
     page_number = int(job["page_number"])
@@ -455,11 +515,12 @@ def _process_page_job(job: dict[str, Any]) -> None:
             str(job["extracted_text_key"]),
         ).decode("utf-8")
         openai = _openai_service()
-        markdown = openai.enhance_document_markdown(
+        enhancement = openai.enhance_document(
             filename=f"{filename} - page {page_number} of {page_count}",
             rendered_pdf=page_pdf,
             extracted_text=extracted_text,
         )
+        markdown = enhancement.markdown
         page_markdown = wrap_page_markdown(
             markdown,
             filename=filename,
@@ -472,6 +533,15 @@ def _process_page_job(job: dict[str, Any]) -> None:
             f"extracted/{project_id}/{document_id}/pages/{page_number:06d}.md"
         )
         _put_markdown(bucket, page_markdown_key, page_markdown)
+        _DISCOVERY.record_document_enhancement(
+            project_id=project_id,
+            document_id=document_id,
+            document_name=str(document["document_name"]),
+            extracted_text=extracted_text,
+            result=enhancement,
+            page_number=page_number,
+            locator=f"page {page_number} of {page_count}",
+        )
 
         indexed_page = build_indexed_document(
             text=page_markdown,
@@ -518,12 +588,18 @@ def _process_page_job(job: dict[str, Any]) -> None:
                 page_count=page_count,
             )
     except Exception as exc:
-        _REPOSITORY.update_document_status(
+        failed = _REPOSITORY.update_document_status(
             project_id=project_id,
             document_id=document_id,
-            status=DocumentStatus.EMBEDDING,
+            status=(
+                DocumentStatus.FAILED
+                if final_attempt
+                else DocumentStatus.EMBEDDING
+            ),
             error=f"Page {page_number}: {type(exc).__name__}: {exc}",
         )
+        if final_attempt:
+            _release_attachment_answer(failed)
         raise
 
 
@@ -554,12 +630,13 @@ def _finalize_page_document(
     )
     enhanced_key = f"extracted/{project_id}/{document_id}/document.md"
     _put_markdown(bucket, enhanced_key, combined)
-    _REPOSITORY.update_document_status(
+    ready = _REPOSITORY.update_document_status(
         project_id=project_id,
         document_id=document_id,
         status=DocumentStatus.READY,
         enhanced_s3_key=enhanced_key,
     )
+    _release_attachment_answer(ready)
     LOGGER.info(
         "Indexed and concatenated %s pages for document %s",
         page_count,
@@ -579,4 +656,57 @@ def _put_markdown(bucket: str, key: str, markdown: str) -> None:
         Body=markdown.encode("utf-8"),
         ContentType="text/markdown; charset=utf-8",
         ServerSideEncryption="AES256",
+    )
+
+
+def _release_attachment_answer(document: dict[str, Any]) -> None:
+    answer_id = str(document.get("source_answer_id") or "")
+    question_id = str(document.get("source_question_id") or "")
+    project_id = str(document.get("project_id") or "")
+    if not answer_id or not question_id or not project_id:
+        return
+    answer = _REPOSITORY.get_question_answer(
+        project_id=project_id,
+        question_id=question_id,
+        answer_id=answer_id,
+    )
+    if answer is None:
+        LOGGER.warning("Attachment answer %s no longer exists", answer_id)
+        return
+    attachments = _ATTACHMENT_LIST_ADAPTER.validate_python(
+        answer.get("attachments") or []
+    )
+    updated: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for attachment in attachments:
+        item = dict(attachment)
+        supporting = _REPOSITORY.get_document(
+            project_id=project_id,
+            document_id=str(item["document_id"]),
+        )
+        if supporting is None:
+            return
+        status = str(supporting.get("status") or "")
+        if status not in {
+            DocumentStatus.READY.value,
+            DocumentStatus.FAILED.value,
+        }:
+            return
+        item["status"] = status
+        if status == DocumentStatus.FAILED.value:
+            error = str(supporting.get("error") or "ingestion failed")
+            item["error"] = error
+            warnings.append(f"{item['filename']}: {error}")
+        updated.append(item)
+    _REPOSITORY.update_answer_attachments(
+        project_id=project_id,
+        question_id=question_id,
+        answer_id=answer_id,
+        attachments=updated,
+    )
+    _REPOSITORY.release_answer_after_documents(
+        project_id=project_id,
+        question_id=question_id,
+        answer_id=answer_id,
+        attachment_warnings=warnings,
     )

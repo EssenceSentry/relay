@@ -19,7 +19,7 @@ researching or drafting.
    project by name or description. Never invent a project ID.
 3. Call `list_project_documents` to inventory the project and confirm relevant
    documents are `READY`.
-4. Run several focused `search_knowledge` calls with the project ID. Cover at
+4. Run several focused `search_project_knowledge` calls with the project ID. Cover at
    least the client or context, challenge, solution, delivery or technology,
    features, and outcomes. Use `top_k=10` to `20` for this broad research.
 5. Search results are previews. Call `get_document_text` for every document that
@@ -53,9 +53,9 @@ not fill gaps with general industry knowledge.
 - When documents are missing, unavailable, or still processing, direct the user
   to `https://essencesentry.shop/` to upload them, then recheck with
   `list_project_documents`.
-- Do not call `create_knowledge_gap` or `resend_knowledge_gap_email` without
+- Do not call `create_project_question` or `resend_question_email` without
   explicit user confirmation; those tools send external email.
-- Do not call `record_verified_fact` without explicit user confirmation. Never
+- Do not call `create_verified_fact` without explicit user confirmation. Never
   store an inference as a verified fact.
 - Creating the dossier itself is read-only. Do not send, publish, or persist it
   unless the user separately requests that action.

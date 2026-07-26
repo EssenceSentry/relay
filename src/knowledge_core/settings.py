@@ -88,6 +88,9 @@ class CommonSettings:
 class IngestionSettings(CommonSettings):
     document_processing_model: str
     ingestion_queue_url: str
+    matching_queue_url: str
+    notification_queue_url: str
+    application_base_url: str
 
     @classmethod
     def from_env(cls) -> IngestionSettings:
@@ -99,6 +102,11 @@ class IngestionSettings(CommonSettings):
                 "gpt-5.4-mini",
             ),
             ingestion_queue_url=required_env("INGESTION_QUEUE_URL"),
+            matching_queue_url=required_env("MATCHING_QUEUE_URL"),
+            notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
+            application_base_url=required_env(
+                "APPLICATION_BASE_URL"
+            ).rstrip("/"),
         )
 
 
@@ -115,6 +123,8 @@ class ApiSettings(CommonSettings):
     ses_from_address: str | None
     ses_reply_domain: str | None
     application_base_url: str | None
+    notification_queue_url: str
+    matching_queue_url: str
 
     @classmethod
     def from_env(cls) -> ApiSettings:
@@ -130,6 +140,8 @@ class ApiSettings(CommonSettings):
             max_upload_bytes=int(
                 os.environ.get("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))
             ),
+            notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
+            matching_queue_url=required_env("MATCHING_QUEUE_URL"),
             **_email_values(),
         )
 
@@ -153,13 +165,92 @@ class ReviewSettings(CommonSettings):
 
 
 @dataclass(frozen=True, slots=True)
+class IdentitySettings:
+    aws_region: str
+    table_name: str
+    matching_queue_url: str
+    initial_admin_emails: frozenset[str]
+
+    @classmethod
+    def from_env(cls) -> IdentitySettings:
+        return cls(
+            aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+            table_name=required_env("TABLE_NAME"),
+            matching_queue_url=required_env("MATCHING_QUEUE_URL"),
+            initial_admin_emails=frozenset(
+                email.strip().casefold()
+                for email in os.environ.get(
+                    "INITIAL_ADMIN_EMAILS",
+                    "",
+                ).split(",")
+                if email.strip()
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MatchingSettings(CommonSettings):
+    matching_model: str
+    matching_threshold: float
+    name_invitations_enabled: bool
+    notification_queue_url: str
+    application_base_url: str
+
+    @classmethod
+    def from_env(cls) -> MatchingSettings:
+        common = CommonSettings.from_env()
+        threshold = float(os.environ.get("MATCHING_THRESHOLD", "0.95"))
+        if not 0.0 <= threshold <= 1.0:
+            raise RuntimeError("MATCHING_THRESHOLD must be between 0 and 1")
+        return cls(
+            **_common_values(common),
+            matching_model=os.environ.get(
+                "MATCHING_MODEL",
+                "gpt-5.6-luna",
+            ),
+            matching_threshold=threshold,
+            name_invitations_enabled=env_bool(
+                "NAME_INVITATIONS_ENABLED",
+                False,
+            ),
+            notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
+            application_base_url=required_env(
+                "APPLICATION_BASE_URL"
+            ).rstrip("/"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationSettings:
+    aws_region: str
+    table_name: str
+    email_enabled: bool
+    ses_from_address: str | None
+    ses_reply_domain: str | None
+    application_base_url: str | None
+
+    @classmethod
+    def from_env(cls) -> NotificationSettings:
+        return cls(
+            aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+            table_name=required_env("TABLE_NAME"),
+            **_email_values(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class InboundEmailSettings:
     aws_region: str
     table_name: str
     inbound_bucket: str
     inbound_prefix: str
+    document_bucket: str
     reply_domain: str
     max_answer_chars: int
+    max_attachment_count: int
+    max_attachment_bytes: int
+    notification_queue_url: str
+    application_base_url: str
 
     @classmethod
     def from_env(cls) -> InboundEmailSettings:
@@ -168,8 +259,22 @@ class InboundEmailSettings:
             table_name=required_env("TABLE_NAME"),
             inbound_bucket=required_env("INBOUND_EMAIL_BUCKET"),
             inbound_prefix=os.environ.get("INBOUND_EMAIL_PREFIX", "inbound/"),
+            document_bucket=required_env("DOCUMENT_BUCKET"),
             reply_domain=required_env("SES_REPLY_DOMAIN").casefold(),
             max_answer_chars=int(
                 os.environ.get("MAX_EMAIL_ANSWER_CHARS", "20000")
             ),
+            max_attachment_count=int(
+                os.environ.get("MAX_EMAIL_ATTACHMENT_COUNT", "10")
+            ),
+            max_attachment_bytes=int(
+                os.environ.get(
+                    "MAX_EMAIL_ATTACHMENT_BYTES",
+                    str(25 * 1024 * 1024),
+                )
+            ),
+            notification_queue_url=required_env("NOTIFICATION_QUEUE_URL"),
+            application_base_url=required_env(
+                "APPLICATION_BASE_URL"
+            ).rstrip("/"),
         )

@@ -6,6 +6,12 @@ from typing import Any
 
 import pytest
 
+from knowledge_core.models import (
+    ContributorCandidate,
+    DocumentEnhancementResult,
+    NameMatchDecision,
+    NameMatchResult,
+)
 from knowledge_core.openai_api import (
     DOCUMENT_ENHANCEMENT_INSTRUCTIONS,
     OpenAIService,
@@ -17,9 +23,26 @@ class FakeResponses:
         self.output_text = output_text
         self.calls: list[dict[str, Any]] = []
 
-    def create(self, **kwargs: Any) -> SimpleNamespace:
+    def parse(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(output_text=self.output_text)
+        return SimpleNamespace(
+            output_parsed=DocumentEnhancementResult(markdown=self.output_text)
+        )
+
+
+class FakeMatchingResponses:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def parse(self, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            output_parsed=NameMatchResult(
+                decision=NameMatchDecision.MATCH,
+                confidence=0.97,
+                rationale="The identity uniquely aligns.",
+            )
+        )
 
 
 def _service(responses: FakeResponses) -> OpenAIService:
@@ -102,3 +125,29 @@ def test_document_enhancement_rejects_empty_model_output() -> None:
             rendered_pdf=b"%PDF-1.7\nrendered",
             extracted_text="source",
         )
+
+
+def test_name_match_includes_nearby_contributors_for_disambiguation() -> None:
+    responses = FakeMatchingResponses()
+    service = object.__new__(OpenAIService)
+    service.__dict__["_client"] = SimpleNamespace(responses=responses)
+    service.__dict__["_matching_model"] = "gpt-5.6-luna"
+
+    result = service.match_contributor_name(
+        user_email="maria.perez@blend360.com",
+        user_display_name="Maria Perez",
+        candidate=ContributorCandidate(
+            display_name="María Pérez",
+            relationship="Delivery lead",
+            confidence=0.96,
+            evidence="María Pérez led delivery.",
+        ),
+        nearby_candidate_names=["María Pereira", "Mario Pérez"],
+    )
+
+    assert result.decision == NameMatchDecision.MATCH
+    call = responses.calls[0]
+    assert call["model"] == "gpt-5.6-luna"
+    assert call["reasoning"] == {"effort": "low"}
+    prompt = call["input"][0]["content"]
+    assert "María Pereira, Mario Pérez" in prompt

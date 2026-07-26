@@ -58,7 +58,7 @@ def _claude_marketplace(version: str) -> dict[str, object]:
                 "name": PLUGIN_NAME,
                 "source": f"./plugins/{PLUGIN_NAME}",
                 "description": (
-                    "Search Blend project evidence and create source-cited "
+                    "Manage Blend project knowledge and create source-cited "
                     "project dossiers."
                 ),
                 "version": version,
@@ -72,8 +72,9 @@ def _install_readme(version: str) -> str:
 
 Version: {version}
 
-This bundle contains the same remote MCP connection and project-dossier skill
-for Codex and Claude Code. It connects to:
+This bundle contains the authenticated remote MCP connection, the general
+project-operations skill, and the source-cited dossier skill for Codex and
+Claude Code. It connects to:
 
 https://essencesentry.shop/mcp/
 
@@ -86,8 +87,9 @@ codex plugin marketplace add /absolute/path/to/blend-project-knowledge-bundle
 codex plugin add {PLUGIN_NAME}@{MARKETPLACE_NAME}
 ```
 
-Start a new thread and invoke `$create-project-dossier`, or ask for a project
-dossier, sales brief, success story, or case study.
+Start a new thread and invoke `$manage-project-knowledge` for project
+operations or `$create-project-dossier` for a dossier, sales brief, success
+story, or case study.
 
 ## Claude Code
 
@@ -99,8 +101,9 @@ claude plugin install {PLUGIN_NAME}@{MARKETPLACE_NAME}
 ```
 
 Run `/reload-plugins`, then invoke
-`/{PLUGIN_NAME}:create-project-dossier` or ask Claude for a project dossier,
-sales brief, success story, or case study.
+`/{PLUGIN_NAME}:manage-project-knowledge` for project operations or
+`/{PLUGIN_NAME}:create-project-dossier` for a dossier, sales brief, success
+story, or case study.
 
 For a temporary Claude Code session without marketplace installation:
 
@@ -108,8 +111,8 @@ For a temporary Claude Code session without marketplace installation:
 claude --plugin-dir /absolute/path/to/blend-project-knowledge-bundle/plugins/{PLUGIN_NAME}
 ```
 
-The current hackathon MCP is public. When authentication is re-enabled, your
-client may prompt you to complete the configured browser login.
+The MCP requires a verified Blend login. Your client opens the configured
+browser authorization flow when it connects.
 """
 
 

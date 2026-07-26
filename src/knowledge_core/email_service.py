@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from typing import Any, Protocol
-from urllib.parse import quote
+from typing import Any, Protocol, cast
 
 import boto3
 
@@ -22,6 +21,13 @@ class QuestionEmailSender(Protocol):
         *,
         missing_details: list[str],
         review_rationale: str,
+    ) -> EmailSendResult: ...
+
+
+class NotificationEmailSender(Protocol):
+    def send_notification(
+        self,
+        notification: dict[str, Any],
     ) -> EmailSendResult: ...
 
 
@@ -45,7 +51,7 @@ class SesEmailService:
         question_text = _required(question, "question")
         context = str(question.get("context") or "").strip()
         priority = str(question.get("priority") or "normal").strip().title()
-        application_url = self._question_url(question)
+        application_url = self._application_base_url
         subject = (
             f"[Blend360] Your expertise is needed — "
             f"{_subject_fragment(project_name, limit=72)}"
@@ -67,8 +73,14 @@ class SesEmailService:
             [
                 "",
                 "Choose whichever response option is easiest:",
-                "1. Reply directly to this email with your answer.",
-                f"2. Answer in your browser: {application_url}",
+                (
+                    "1. Reply directly with your answer. You may attach up to "
+                    "10 supported project documents (25 MiB total)."
+                ),
+                (
+                    "2. Connect your agent and ask it to list your assigned "
+                    f"questions: {application_url}"
+                ),
                 "",
                 "Your response is reviewed for completeness. When sufficient, it "
                 "becomes reusable project knowledge for Blend360 teams.",
@@ -108,13 +120,18 @@ class SesEmailService:
                 '<div style="margin-top:9px;font-size:20px;font-weight:700;'
                 f'line-height:1.45;color:#17242b">{escape(question_text)}</div></div>'
                 f"{html_context}"
+                '<div style="margin:24px 0;padding:18px;border-radius:12px;'
+                'background:#f1f7f6;color:#3f5158;line-height:1.6">'
+                "<strong>Reply directly to this email.</strong> You may attach "
+                "supporting PDF, Word, PowerPoint, text, Markdown, CSV, or JSON "
+                "documents (up to 10 files and 25 MiB total).</div>"
                 '<div style="margin:28px 0 18px;text-align:center">'
                 f'<a href="{escape(application_url)}" style="display:inline-block;'
                 "padding:14px 22px;border-radius:11px;background:#e7603b;color:#fff;"
-                'font-weight:700;text-decoration:none">Answer in your browser</a></div>'
+                'font-weight:700;text-decoration:none">Connect your agent</a></div>'
                 '<p style="margin:0;text-align:center;color:#536168;font-size:14px;'
-                'line-height:1.55"><strong>Prefer email?</strong> Simply reply to this '
-                "message. You do not need to use the button.</p>"
+                'line-height:1.55">Ask the connected agent to list your assigned '
+                "questions, then submit the answer there.</p>"
                 '<div style="margin-top:26px;padding-top:20px;border-top:1px solid '
                 '#e2e8e6;color:#536168;font-size:13px;line-height:1.55">'
                 "Your response is reviewed for completeness. Once accepted, it becomes "
@@ -140,7 +157,7 @@ class SesEmailService:
         recipient = _required(question, "assigned_expert_email")
         project_name = _required(question, "project_name")
         question_text = _required(question, "question")
-        application_url = self._question_url(question)
+        application_url = self._application_base_url
         details = [
             detail.strip() for detail in missing_details if detail.strip()
         ]
@@ -166,8 +183,14 @@ class SesEmailService:
                 review_rationale,
                 "",
                 "Choose whichever response option is easiest:",
-                "1. Reply to this email with only the missing detail.",
-                f"2. Continue in your browser: {application_url}",
+                (
+                    "1. Reply with only the missing detail, optionally attaching "
+                    "supporting project documents."
+                ),
+                (
+                    "2. Connect your agent and ask it to list your assigned "
+                    f"questions: {application_url}"
+                ),
                 "",
                 "You do not need to repeat your previous answer.",
                 "",
@@ -201,13 +224,15 @@ class SesEmailService:
                 '<div style="margin-top:16px;padding:15px 17px;border-radius:12px;'
                 'background:#f3f6f5;color:#536168;line-height:1.55">'
                 f"<strong>Review note:</strong> {escape(review_rationale)}</div>"
+                '<div style="margin:24px 0;padding:18px;border-radius:12px;'
+                'background:#f1f7f6;color:#3f5158;line-height:1.6">'
+                "<strong>Reply directly with only the missing detail.</strong> "
+                "You may attach supporting project documents and do not need to "
+                "repeat your previous answer.</div>"
                 '<div style="margin:28px 0 18px;text-align:center">'
                 f'<a href="{escape(application_url)}" style="display:inline-block;'
                 "padding:14px 22px;border-radius:11px;background:#e7603b;color:#fff;"
-                'font-weight:700;text-decoration:none">Continue your answer</a></div>'
-                '<p style="margin:0;text-align:center;color:#536168;font-size:14px;'
-                'line-height:1.55"><strong>Prefer email?</strong> Reply with only the '
-                "missing detail. You do not need to repeat your previous answer.</p>"
+                'font-weight:700;text-decoration:none">Connect your agent</a></div>'
                 '<div style="margin-top:26px;padding-top:20px;border-top:1px solid '
                 '#e2e8e6;color:#536168;font-size:13px;line-height:1.55">'
                 f"<strong>Original question</strong><br>{escape(question_text)}</div>"
@@ -221,37 +246,72 @@ class SesEmailService:
             html_body=html_body,
         )
 
-    def _question_url(self, question: dict[str, Any]) -> str:
-        reply_address = _required(question, "reply_address")
-        local_part, separator, _domain = reply_address.partition("@")
-        if not separator or not local_part.startswith("kg-"):
-            raise ValueError(
-                "Question reply address does not contain an answer token"
+    def send_notification(
+        self,
+        notification: dict[str, Any],
+    ) -> EmailSendResult:
+        recipient = _required(notification, "email")
+        title = _required(notification, "title")
+        message = _required(notification, "message")
+        action_url = str(notification.get("action_url") or "").strip()
+        data = cast(dict[str, Any], notification.get("data") or {})
+        project_name = str(data.get("project_name") or "").strip()
+        subject = f"[Blend360] {_subject_fragment(title, limit=96)}"
+        text_lines = ["BLEND360 PROJECT KNOWLEDGE", "", title, "", message]
+        action_html = ""
+        if action_url:
+            text_lines.extend(["", f"Open Relay: {action_url}"])
+            action_html = (
+                '<div style="margin:28px 0 10px;text-align:center">'
+                f'<a href="{escape(action_url)}" style="display:inline-block;'
+                "padding:14px 22px;border-radius:11px;background:#e7603b;"
+                'color:#fff;font-weight:700;text-decoration:none">'
+                "Open Relay</a></div>"
             )
-        answer_token = local_part.removeprefix("kg-").strip()
-        if not answer_token:
-            raise ValueError(
-                "Question reply address does not contain an answer token"
+        project_badge = ""
+        if project_name:
+            project_badge = (
+                '<span style="display:inline-block;margin-bottom:18px;'
+                "padding:6px 10px;border-radius:999px;background:#eef2f1;"
+                'color:#536168;font-size:12px;font-weight:700">'
+                f"{escape(project_name)}</span>"
             )
-        return (
-            f"{self._application_base_url}#answer="
-            f"{quote(answer_token, safe='')}"
+        html_body = _html_shell(
+            title=title,
+            preheader=message,
+            body=(
+                f"{project_badge}"
+                '<p style="margin:0;color:#536168;line-height:1.65;'
+                f'font-size:16px">{escape(message)}</p>'
+                f"{action_html}"
+                '<div style="margin-top:26px;padding-top:20px;'
+                'border-top:1px solid #e2e8e6;color:#718087;'
+                'font-size:13px;line-height:1.55">'
+                "This message was generated from Relay project activity."
+                "</div>"
+            ),
+        )
+        return self._send(
+            recipient=recipient,
+            reply_address=None,
+            subject=subject,
+            text_body="\n".join(text_lines),
+            html_body=html_body,
         )
 
     def _send(
         self,
         *,
         recipient: str,
-        reply_address: str,
+        reply_address: str | None,
         subject: str,
         text_body: str,
         html_body: str,
     ) -> EmailSendResult:
-        response = self._client.send_email(
-            FromEmailAddress=self._from_address,
-            Destination={"ToAddresses": [recipient]},
-            ReplyToAddresses=[reply_address],
-            Content={
+        request: dict[str, Any] = {
+            "FromEmailAddress": self._from_address,
+            "Destination": {"ToAddresses": [recipient]},
+            "Content": {
                 "Simple": {
                     "Subject": {"Data": subject, "Charset": "UTF-8"},
                     "Body": {
@@ -260,6 +320,11 @@ class SesEmailService:
                     },
                 }
             },
+        }
+        if reply_address:
+            request["ReplyToAddresses"] = [reply_address]
+        response = self._client.send_email(
+            **request,
         )
         return EmailSendResult(message_id=str(response["MessageId"]))
 
@@ -303,7 +368,7 @@ def _html_shell(*, title: str, preheader: str, body: str) -> str:
         "</div>"
         '<div style="padding:18px 24px;color:#718087;font-size:12px;'
         'line-height:1.55;text-align:center">'
-        "Sent by Blend360 Project Knowledge. Reply to this email or use the "
-        "private answer link above.</div>"
+        "Sent by Blend360 Project Knowledge. Reply to the original question "
+        "email or answer through your connected agent.</div>"
         "</div></body></html>"
     )

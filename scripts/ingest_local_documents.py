@@ -19,9 +19,15 @@ from _bootstrap_aws import (
     create_session,
     find_project_by_name,
     get_project,
+    list_projects,
     load_stack_context,
     require_output,
     resolve_table_name,
+)
+from _project_mapping import (
+    ProjectFileGroup,
+    load_project_mapping,
+    resolve_mapped_files,
 )
 from _type_guards import is_string_keyed_dict
 from botocore.exceptions import ClientError
@@ -55,7 +61,7 @@ CONTENT_TYPES = {
 }
 
 
-def _utc_now_iso() -> str:
+def utc_now_iso() -> str:
     return (
         datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     )
@@ -87,7 +93,14 @@ def _arguments() -> argparse.Namespace:
         default=Path("PIH - Dataset"),
         help="Local directory to scan recursively (default: PIH - Dataset).",
     )
-    parser.add_argument("--count", type=int, default=50)
+    parser.add_argument(
+        "--count",
+        type=int,
+        help=(
+            "Number of files to select. Defaults to 50 for one project and "
+            "all mapped files with --project-map."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
         "--extensions",
@@ -101,6 +114,14 @@ def _arguments() -> argparse.Namespace:
         help=(
             "Reuse or create a project with this name. Defaults to the source "
             "directory name."
+        ),
+    )
+    project.add_argument(
+        "--project-map",
+        type=Path,
+        help=(
+            "JSON mapping of project keys to titles and source-relative files. "
+            "Missing projects are created automatically."
         ),
     )
     parser.add_argument("--project-description")
@@ -225,9 +246,10 @@ def _create_project(
     name: str,
     description: str | None,
     created_by: str,
+    external_project_key: str | None = None,
 ) -> dict[str, Any]:
     project_id = _new_id("prj")
-    now = _utc_now_iso()
+    now = utc_now_iso()
     item = {
         "PK": f"PROJECT#{project_id}",
         "SK": "META",
@@ -237,6 +259,7 @@ def _create_project(
         "project_id": project_id,
         "name": name.strip(),
         "description": (description or "").strip() or None,
+        "external_project_key": external_project_key,
         "created_by": created_by,
         "created_at": now,
         "updated_at": now,
@@ -276,7 +299,43 @@ def _resolve_project(
     )
 
 
-def _get_document(
+def resolve_mapped_projects(
+    table: Any,
+    *,
+    groups: set[ProjectFileGroup],
+    created_by: str,
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    existing_by_name = {
+        str(project.get("name", "")).strip().casefold(): project
+        for project in list_projects(table)
+    }
+    existing_by_key = {
+        str(project["external_project_key"]): project
+        for project in existing_by_name.values()
+        if project.get("external_project_key")
+    }
+    projects: dict[str, dict[str, Any]] = {}
+    created_keys: set[str] = set()
+    for group in sorted(groups, key=lambda item: item.key.casefold()):
+        project = existing_by_key.get(group.key) or existing_by_name.get(
+            group.title.casefold()
+        )
+        if project is None:
+            project = _create_project(
+                table,
+                name=group.title,
+                description=group.description,
+                created_by=created_by,
+                external_project_key=group.key,
+            )
+            existing_by_name[group.title.casefold()] = project
+            existing_by_key[group.key] = project
+            created_keys.add(group.key)
+        projects[group.key] = project
+    return projects, created_keys
+
+
+def get_document(
     table: Any,
     *,
     project_id: str,
@@ -305,7 +364,7 @@ def _create_document(
     size_bytes: int,
     uploaded_by: str,
 ) -> None:
-    now = _utc_now_iso()
+    now = utc_now_iso()
     table.put_item(
         Item={
             "PK": f"PROJECT#{project_id}",
@@ -349,7 +408,7 @@ def _reset_failed_document(
         },
         ExpressionAttributeValues={
             ":status": STATUS_UPLOADING,
-            ":updated": _utc_now_iso(),
+            ":updated": utc_now_iso(),
         },
     )
 
@@ -375,7 +434,7 @@ def _mark_upload_failed(
         },
         ExpressionAttributeValues={
             ":status": STATUS_FAILED,
-            ":updated": _utc_now_iso(),
+            ":updated": utc_now_iso(),
             ":error": f"{type(error).__name__}: {error}"[:4000],
         },
     )
@@ -397,7 +456,7 @@ def _upload_one(
     filename = _safe_filename(path.name)
     key = f"uploads/{project_id}/{document_id}/{filename}"
     relative_path = path.relative_to(source).as_posix()
-    existing = _get_document(
+    existing = get_document(
         table,
         project_id=project_id,
         document_id=document_id,
@@ -476,10 +535,19 @@ def _upload_one(
     }
 
 
-def _print_selection(source: Path, selected: Iterable[Path]) -> None:
+def _print_selection(
+    source: Path,
+    selected: Iterable[Path],
+    assignments: dict[Path, ProjectFileGroup] | None = None,
+) -> None:
     for path in selected:
         size_mib = path.stat().st_size / (1024 * 1024)
-        print(f"- {path.relative_to(source)} ({size_mib:.2f} MiB)")
+        project = (
+            f" -> {assignments[path].title!r}"
+            if assignments is not None
+            else ""
+        )
+        print(f"- {path.relative_to(source)} ({size_mib:.2f} MiB){project}")
 
 
 def main() -> None:
@@ -489,6 +557,11 @@ def main() -> None:
         raise SystemExit(f"Source directory not found: {source}")
     if args.upload_delay < 0:
         raise SystemExit("--upload-delay cannot be negative.")
+    if args.project_map is not None and args.project_description is not None:
+        raise SystemExit(
+            "--project-description cannot be combined with --project-map; "
+            "put descriptions in the mapping."
+        )
 
     extensions = parse_extensions(args.extensions)
     files = eligible_files(source, extensions=extensions)
@@ -497,12 +570,34 @@ def main() -> None:
             f"No eligible files found in {source} for "
             f"{', '.join(sorted(extensions))}."
         )
-    selected = select_files(files, count=args.count, seed=args.seed)
+    assignments: dict[Path, ProjectFileGroup] | None = None
+    if args.project_map is not None:
+        try:
+            mapping = load_project_mapping(args.project_map)
+            assignments = resolve_mapped_files(
+                source=source,
+                available_files=files,
+                groups=mapping,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        files = sorted(
+            assignments,
+            key=lambda path: path.relative_to(source).as_posix().casefold(),
+        )
+    requested_count = (
+        args.count
+        if args.count is not None
+        else len(files)
+        if assignments is not None
+        else 50
+    )
+    selected = select_files(files, count=requested_count, seed=args.seed)
     print(
         f"Selected {len(selected)} of {len(files)} eligible files "
         f"with seed {args.seed}:"
     )
-    _print_selection(source, selected)
+    _print_selection(source, selected, assignments)
     if args.dry_run:
         print("Dry run complete; no AWS resources were changed.")
         return
@@ -522,24 +617,46 @@ def main() -> None:
     table = session.resource("dynamodb").Table(table_name)
     s3 = session.client("s3")
 
-    project_name = args.project_name or source.name
-    project, created = _resolve_project(
-        table,
-        project_id=args.project_id,
-        project_name=project_name,
-        project_description=args.project_description,
-        created_by=args.uploaded_by,
-    )
-    project_id = str(project["project_id"])
-    project_action = "Created" if created else "Using"
-    print(
-        f"{project_action} project {project['name']!r} "
-        f"({project_id}); uploading to {bucket}."
-    )
+    mapped_projects: dict[str, dict[str, Any]] | None = None
+    created_project_keys: set[str] = set()
+    project: dict[str, Any] | None = None
+    if assignments is not None:
+        mapped_projects, created_project_keys = resolve_mapped_projects(
+            table,
+            groups={assignments[path] for path in selected},
+            created_by=args.uploaded_by,
+        )
+        print(
+            f"Resolved {len(mapped_projects)} mapped projects "
+            f"({len(created_project_keys)} created); uploading to {bucket}."
+        )
+    else:
+        project_name = args.project_name or source.name
+        project, created = _resolve_project(
+            table,
+            project_id=args.project_id,
+            project_name=project_name,
+            project_description=args.project_description,
+            created_by=args.uploaded_by,
+        )
+        project_id = str(project["project_id"])
+        project_action = "Created" if created else "Using"
+        print(
+            f"{project_action} project {project['name']!r} "
+            f"({project_id}); uploading to {bucket}."
+        )
 
-    started_at = _utc_now_iso()
+    started_at = utc_now_iso()
     results: list[dict[str, Any]] = []
     for index, path in enumerate(selected, start=1):
+        group = assignments[path] if assignments is not None else None
+        selected_project = (
+            mapped_projects[group.key]
+            if group is not None and mapped_projects is not None
+            else project
+        )
+        assert selected_project is not None
+        project_id = str(selected_project["project_id"])
         result = _upload_one(
             path=path,
             source=source,
@@ -550,6 +667,10 @@ def main() -> None:
             uploaded_by=args.uploaded_by,
             retry_failed=args.retry_failed,
         )
+        result["project_id"] = project_id
+        result["project_name"] = str(selected_project["name"])
+        if group is not None:
+            result["project_key"] = group.key
         results.append(result)
         print(f"[{index}/{len(selected)}] {result['status']}: {result['path']}")
         if index < len(selected) and args.upload_delay:
@@ -560,14 +681,27 @@ def main() -> None:
         "region": session.region_name,
         "source": str(source),
         "seed": args.seed,
-        "requested_count": args.count,
+        "requested_count": requested_count,
         "eligible_count": len(files),
-        "project_id": project_id,
-        "project_name": project["name"],
         "started_at": started_at,
-        "completed_at": _utc_now_iso(),
+        "completed_at": utc_now_iso(),
         "results": results,
     }
+    if mapped_projects is None:
+        assert project is not None
+        report["project_id"] = str(project["project_id"])
+        report["project_name"] = str(project["name"])
+    else:
+        report["project_map"] = str(args.project_map)
+        report["projects"] = [
+            {
+                "project_key": key,
+                "project_id": str(mapped_project["project_id"]),
+                "project_name": str(mapped_project["name"]),
+                "created": key in created_project_keys,
+            }
+            for key, mapped_project in sorted(mapped_projects.items())
+        ]
     args.report.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     )
@@ -581,9 +715,8 @@ def main() -> None:
     )
     print(f"Report: {args.report}")
     print(
-        "Monitor ingestion with: "
-        f"uv run python scripts/ingestion_status.py --project-id {project_id} "
-        f"--report {args.report} --wait"
+        "Monitor ingestion with: uv run python "
+        f"scripts/ingestion_status.py --report {args.report} --wait"
     )
     if counts["failed"]:
         raise SystemExit(1)

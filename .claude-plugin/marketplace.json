@@ -9,8 +9,8 @@
     {
       "name": "blend-project-knowledge",
       "source": "./plugins/blend-project-knowledge",
-      "description": "Search Blend project evidence and create source-cited project dossiers.",
-      "version": "0.2.0"
+      "description": "Manage Blend project knowledge and create source-cited project dossiers.",
+      "version": "1.0.0"
     }
   ]
 }

@@ -31,8 +31,8 @@ if container.settings.mcp_auth_enabled:
     )
     auth_settings = build_mcp_auth_settings(container.settings)
 else:
-    logging.getLogger(__name__).warning(
-        "MCP authentication is disabled; all MCP tools are publicly accessible"
+    raise RuntimeError(
+        "MCP authentication is required in API/MCP contract v1"
     )
 mcp = build_mcp_server(
     container,
@@ -51,14 +51,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 app = FastAPI(
     title="Blend Project Knowledge API",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["Mcp-Session-Id"],
 )

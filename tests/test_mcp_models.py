@@ -34,8 +34,7 @@ def test_search_response_uses_bounded_previews_and_safe_warnings() -> None:
 
     assert result.hits[0].text_preview == "x" * 1_600 + "…"
     assert result.hits[0].text_truncated is True
-    assert result.hits[0].source_s3_key is not None
-    assert result.hits[0].source_s3_key.endswith("/dossier.md")
+    assert "s3_key" not in result.hits[0].model_dump()
     assert result.hits[0].page_number == 3
     assert result.hits[0].locator == "page 3 of 8"
     assert result.warnings == ["Vector retrieval is temporarily unavailable."]
@@ -63,9 +62,8 @@ def test_document_text_concatenates_pages_and_references_original() -> None:
 
     assert result.text == "page one\n\npage two"
     assert result.page_count == 2
-    assert result.source_s3_key.endswith("/dossier.pptx")
-    assert result.enhanced_s3_key is not None
-    assert result.enhanced_s3_key.endswith("/document.md")
+    assert "s3_key" not in result.model_dump()
+    assert "enhanced_s3_key" not in result.model_dump()
     assert result.content_hash is not None
 
 

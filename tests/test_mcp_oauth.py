@@ -220,7 +220,7 @@ def test_oauth_discovery_and_mcp_challenge_are_exposed() -> None:
     assert registration.status_code == 201
     assert registration.json()["client_id"] in store.clients
     tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
-    assert tools["search_knowledge"].meta == {
+    assert tools["search_project_knowledge"].meta == {
         "securitySchemes": [
             {
                 "type": "oauth2",

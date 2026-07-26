@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from app.auth import Principal
 from app.routes import build_api_router
 from fastapi import FastAPI
 
@@ -38,7 +39,12 @@ class FakeRetrieval:
 
 
 class FakeRepository:
-    def list_projects(self) -> list[dict[str, Any]]:
+    def list_projects(
+        self,
+        *,
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
+        assert include_archived is False
         return [
             {
                 "project_id": "prj_1",
@@ -61,17 +67,45 @@ class FakeRepository:
             "enhanced_s3_key": "extracted/prj_1/doc_1/document.md",
         }
 
+    def get_project_membership(
+        self,
+        *,
+        project_id: str,
+        email: str,
+    ) -> None:
+        del project_id, email
+        return None
+
+    def get_project(self, project_id: str) -> dict[str, Any] | None:
+        return next(
+            (
+                project
+                for project in self.list_projects()
+                if project["project_id"] == project_id
+            ),
+            None,
+        )
+
 
 def test_web_search_returns_project_context_and_download_availability() -> None:
     container = SimpleNamespace(
         retrieval=FakeRetrieval(),
         repository=FakeRepository(),
+        settings=SimpleNamespace(
+            application_base_url="https://knowledge.example.com",
+        ),
+    )
+    principal = Principal(
+        subject="user-1",
+        email="reader@blend360.com",
+        groups=frozenset(),
+        claims={},
     )
     app = FastAPI()
     app.include_router(
         build_api_router(
             container,  # pyright: ignore[reportArgumentType]
-            lambda: None,
+            lambda: principal,
         )
     )
 
