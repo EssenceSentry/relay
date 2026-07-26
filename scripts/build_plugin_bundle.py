@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the static cross-client Blend Project Knowledge plugin bundle."""
+"""Build the static cross-client Relay plugin bundle."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_NAME = "blend-project-knowledge"
-MARKETPLACE_NAME = "blend360-project-knowledge"
+PLUGIN_NAME = "relay"
+MARKETPLACE_NAME = "relay"
 PLUGIN_SOURCE = ROOT / "plugins" / PLUGIN_NAME
 DOWNLOADS_DIR = ROOT / "frontend" / "downloads"
 ARCHIVE_PATH = DOWNLOADS_DIR / f"{PLUGIN_NAME}-bundle.zip"
@@ -27,7 +27,7 @@ def _read_plugin_manifest() -> dict[str, object]:
 def _codex_marketplace(_version: str) -> dict[str, object]:
     return {
         "name": MARKETPLACE_NAME,
-        "interface": {"displayName": "Blend360 Project Knowledge"},
+        "interface": {"displayName": "Relay"},
         "plugins": [
             {
                 "name": PLUGIN_NAME,
@@ -51,15 +51,14 @@ def _claude_marketplace(version: str) -> dict[str, object]:
         "name": MARKETPLACE_NAME,
         "owner": {"name": "Blend360"},
         "description": (
-            "Blend360 project knowledge tools and evidence-backed dossier workflows."
+            "Relay project knowledge tools and evidence-backed dossier workflows."
         ),
         "plugins": [
             {
                 "name": PLUGIN_NAME,
                 "source": f"./plugins/{PLUGIN_NAME}",
                 "description": (
-                    "Manage Blend project knowledge and create source-cited "
-                    "project dossiers."
+                    "Search and manage Relay project knowledge with cited dossiers."
                 ),
                 "version": version,
             }
@@ -68,11 +67,11 @@ def _claude_marketplace(version: str) -> dict[str, object]:
 
 
 def _install_readme(version: str) -> str:
-    return f"""# Blend Project Knowledge plugin bundle
+    return f"""# Relay plugin bundle
 
 Version: {version}
 
-This bundle contains the authenticated remote MCP connection, the general
+This Relay bundle contains the authenticated remote MCP connection, the general
 project-operations skill, and the source-cited dossier skill for Codex and
 Claude Code. It connects to:
 
@@ -83,7 +82,7 @@ https://essencesentry.shop/mcp/
 Extract this archive, then run:
 
 ```bash
-codex plugin marketplace add /absolute/path/to/blend-project-knowledge-bundle
+codex plugin marketplace add /absolute/path/to/relay-bundle
 codex plugin add {PLUGIN_NAME}@{MARKETPLACE_NAME}
 ```
 
@@ -96,7 +95,7 @@ story, or case study.
 Extract this archive, then run:
 
 ```bash
-claude plugin marketplace add /absolute/path/to/blend-project-knowledge-bundle
+claude plugin marketplace add /absolute/path/to/relay-bundle
 claude plugin install {PLUGIN_NAME}@{MARKETPLACE_NAME}
 ```
 
@@ -108,10 +107,10 @@ story, or case study.
 For a temporary Claude Code session without marketplace installation:
 
 ```bash
-claude --plugin-dir /absolute/path/to/blend-project-knowledge-bundle/plugins/{PLUGIN_NAME}
+claude --plugin-dir /absolute/path/to/relay-bundle/plugins/{PLUGIN_NAME}
 ```
 
-The MCP requires a verified Blend login. Your client opens the configured
+The MCP requires a verified Relay login. Your client opens the configured
 browser authorization flow when it connects.
 """
 
@@ -148,8 +147,8 @@ def main() -> None:
     version = str(manifest["version"])
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="blend-plugin-") as temp:
-        bundle_root = Path(temp) / "blend-project-knowledge-bundle"
+    with tempfile.TemporaryDirectory(prefix="relay-plugin-") as temp:
+        bundle_root = Path(temp) / "relay-bundle"
         plugin_target = bundle_root / "plugins" / PLUGIN_NAME
         shutil.copytree(PLUGIN_SOURCE, plugin_target)
         _write_json(

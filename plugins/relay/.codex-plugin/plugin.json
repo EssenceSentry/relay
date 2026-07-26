@@ -1,7 +1,7 @@
 {
-  "name": "blend-project-knowledge",
-  "version": "1.0.0",
-  "description": "Manage Blend project knowledge and create source-cited dossiers.",
+  "name": "relay",
+  "version": "1.0.1",
+  "description": "Search and manage Relay project knowledge with cited dossiers.",
   "author": {
     "name": "Blend360"
   },
@@ -15,9 +15,9 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Blend Project Knowledge",
+    "displayName": "Relay",
     "shortDescription": "Manage projects and create cited dossiers.",
-    "longDescription": "Connects Codex to the authenticated Blend Project Knowledge MCP and adds safe project operations, direct-to-S3 upload guidance, question workflows, and evidence-first dossiers with inline source citations.",
+    "longDescription": "Connects Codex to Relay and adds safe project operations, direct-to-S3 upload guidance, question workflows, directory lookup, and evidence-first dossiers with inline source citations.",
     "developerName": "Blend360",
     "category": "Productivity",
     "capabilities": [

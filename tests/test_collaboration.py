@@ -176,9 +176,7 @@ def test_discovery_uses_grounded_exact_emails_and_preserves_page_evidence() -> (
     assert repository.evidence[0]["display_name"] == "Priya Shah"
     assert matching.calls == repository.evidence
     assert repository.discovery is not None
-    assert repository.discovery["blend360_emails"] == [
-        "joann@blend360.com"
-    ]
+    assert repository.discovery["blend360_emails"] == ["joann@blend360.com"]
 
 
 def test_discovery_accepts_exact_email_read_from_a_scanned_page() -> None:

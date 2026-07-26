@@ -1,0 +1,267 @@
+% =====================================================================
+% blenddossier-expanded.sty -- expanded executive-grid project dossier
+% =====================================================================
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{blenddossier}[2026/07/26 Blend360 executive dossier]
+
+\RequirePackage[letterpaper,top=0.74in,bottom=0.74in,left=0.78in,right=0.68in,
+  headheight=24pt,headsep=13pt,footskip=34pt]{geometry}
+\RequirePackage{xcolor}
+\RequirePackage{tcolorbox}
+\tcbuselibrary{raster,skins,breakable}
+\RequirePackage{paracol}
+\RequirePackage{multicol}
+\RequirePackage{ragged2e}
+\RequirePackage{microtype}
+\microtypesetup{protrusion=false}
+\RequirePackage{needspace}
+\RequirePackage{eso-pic}
+\RequirePackage{fancyhdr}
+\RequirePackage{lastpage}
+\RequirePackage{graphicx}
+\RequirePackage{iftex}
+\ifPDFTeX
+  \PackageError{blenddossier-expanded}{Use XeLaTeX or LuaLaTeX}{This style uses OpenType fonts.}
+\fi
+\RequirePackage{fontspec}
+\IfFontExistsTF{Inter}{
+  \setsansfont{Inter}[
+    UprightFont={* Regular},
+    BoldFont={* SemiBold},
+    ItalicFont={* Italic},
+    BoldItalicFont={* SemiBold Italic}]
+}{
+  \setsansfont{lmsans10-regular.otf}[
+    BoldFont={lmsans10-bold.otf},
+    ItalicFont={lmsans10-oblique.otf},
+    BoldItalicFont={lmsans10-boldoblique.otf}]
+}
+\IfFontExistsTF{Inter Display}{
+  \newfontfamily\displayfont{Inter Display}[
+    UprightFont={* Regular},
+    BoldFont={* ExtraBold}]
+}{
+  \IfFontExistsTF{Inter}{
+    \newfontfamily\displayfont{Inter}
+  }{
+    \newfontfamily\displayfont{lmsans10-regular.otf}[
+      BoldFont={lmsans10-bold.otf}]
+  }
+}
+\RequirePackage{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\setlength{\multicolsep}{6pt}
+\raggedbottom
+\renewcommand{\familydefault}{\sfdefault}
+
+% Palette
+\definecolor{blendblue}{HTML}{22B3E3}
+\definecolor{blendnavy}{HTML}{062F53}
+\definecolor{blendink}{HTML}{29333C}
+\definecolor{blendmuted}{HTML}{66737E}
+\definecolor{blendpanel}{HTML}{F2F8FA}
+\definecolor{blendpaneltwo}{HTML}{F7FAFB}
+\definecolor{blendhair}{HTML}{D9E2E7}
+\definecolor{blendrule}{HTML}{E3E9EC}
+\definecolor{amberbg}{HTML}{FFF8ED}
+\definecolor{amberink}{HTML}{7D521D}
+\definecolor{ambertxt}{HTML}{5B472D}
+\definecolor{amberacc}{HTML}{F39A37}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blendblue,
+  urlcolor=blendblue,
+  citecolor=blendblue,
+  pdfborder={0 0 0}
+}
+
+\newcommand{\lead}[1]{{\bfseries\color{blendnavy}#1}}
+\newcommand{\caps}[1]{{\addfontfeatures{LetterSpace=6}\fontsize{7.5}{9.1}\selectfont\bfseries #1}}
+\newcommand{\dossierjustified}{%
+  \justifying
+  \hyphenpenalty=900
+  \exhyphenpenalty=300
+  \tolerance=1100
+  \emergencystretch=0.35em
+  \parindent=0pt}
+
+% Running furniture and cyan page rail.
+\newcommand{\dossierfooterleft}{}
+\newcommand{\dossierfooterright}{}
+\newcommand{\dossierprojnum}{}
+\newcommand{\dossierprojtitle}{}
+
+\AddToShipoutPictureBG{%
+  \AtPageLowerLeft{\hspace{0.38in}\raisebox{0.74in}{%
+    {\color{blendblue}\rule{1.6pt}{\dimexpr\paperheight-1.48in\relax}}}}%
+  \AtPageLowerLeft{\hspace{0.78in}\raisebox{34pt}{%
+    \begin{minipage}[b]{7.04in}
+      {\color{blendrule}\rule{\linewidth}{0.5pt}}\\[5pt]
+      \begin{minipage}[t]{0.61\linewidth}
+        {\caps{\dossierfooterleft}\color{blendmuted}}
+      \end{minipage}\hfill
+      \begin{minipage}[t]{0.37\linewidth}\raggedleft
+        {\fontsize{7.2}{9.2}\selectfont\bfseries\color{blendmuted}%
+         \dossierfooterright\quad\textbullet\quad\thepage\,/\,\pageref{LastPage}}
+      \end{minipage}
+    \end{minipage}}}}
+
+\fancypagestyle{dossiercontinued}{%
+  \fancyhf{}
+  \fancyhead[L]{%
+    {\caps{PROJECT \dossierprojnum}}\hspace{8pt}%
+    {\fontsize{7.8}{9.4}\selectfont\bfseries\color{blendnavy}\dossierprojtitle}}
+  \fancyhead[R]{{\caps{CONTINUED}}}
+  \renewcommand{\headrulewidth}{0.5pt}
+  \renewcommand{\headrule}{%
+    \hbox to\headwidth{\color{blendhair}\leaders\hrule height \headrulewidth\hfill}}
+}
+\fancypagestyle{dossierfirst}{%
+  \fancyhf{}
+  \renewcommand{\headrulewidth}{0pt}
+}
+\pagestyle{dossiercontinued}
+
+\newcommand{\dossierfooter}[2]{%
+  \renewcommand{\dossierfooterleft}{#1}%
+  \renewcommand{\dossierfooterright}{#2}}
+
+% Page-one hero.
+\newtcbox{\projecttag}{on line,enhanced,arc=1.5pt,boxrule=0pt,
+  colback=blendnavy,colframe=blendnavy,left=7pt,right=7pt,top=3pt,bottom=3pt,
+  boxsep=0pt,nobeforeafter}
+
+\newcommand{\dossierheader}[3]{%
+  \renewcommand{\dossierprojnum}{#1}%
+  \renewcommand{\dossierprojtitle}{#2}%
+  \begingroup
+  \projecttag{{\color{white}\caps{PROJECT #1}}}\par
+  \vspace{8pt}
+  {\displayfont\bfseries\fontsize{23.5}{25}\selectfont\color{blendnavy}#2}\par
+  \vspace{6pt}
+  {\addfontfeatures{LetterSpace=4}\fontsize{8.1}{10}\selectfont\bfseries\color{blendblue}\MakeUppercase{#3}\par}
+  \vspace{9pt}
+  {\color{blendnavy}\rule{\linewidth}{1.1pt}}\par
+  \vspace{8pt}
+  \endgroup}
+
+% Section heads.
+\newcommand{\dsection}[1]{%
+  \par\vspace{8pt}\needspace{3\baselineskip}%
+  \noindent\raisebox{0.45ex}{\color{blendblue}\rule{5pt}{5pt}}\hspace{7pt}%
+  {\addfontfeatures{LetterSpace=5}\fontsize{8.4}{10.2}\selectfont\bfseries\color{blendnavy}\MakeUppercase{#1}}\par
+  \vspace{4pt}{\color{blendhair}\rule{\linewidth}{0.65pt}}\par\vspace{5pt}}
+
+\newcommand{\dsubsection}[1]{%
+  \par\vspace{5pt}\needspace{2.5\baselineskip}%
+  {\fontsize{8.4}{10.3}\selectfont\bfseries\color{blendnavy}#1}\par
+  \vspace{2pt}{\color{blendblue}\rule{0.55in}{1.3pt}}\par\vspace{4pt}}
+
+\newcommand{\body}[1]{{\fontsize{8.45}{12.2}\selectfont\color{blendink}\dossierjustified #1\par}}
+\newcommand{\bodyspace}{\vspace{5pt}}
+
+% Feature rows.
+\newcommand{\feature}[3]{%
+  \par\vspace{3.5pt}\needspace{2\baselineskip}%
+  \begingroup
+    \fontsize{7.75}{10.8}\selectfont\color{blendink}\RaggedRight\hyphenpenalty=5000\emergencystretch=1em%
+    \hangindent=31pt\hangafter=1
+    \noindent\makebox[31pt][l]{%
+      {\bfseries\fontsize{7.8}{10.8}\selectfont\color{blendblue}#1}%
+      \hspace{5pt}{\color{blendhair}\rule[-2.2pt]{0.7pt}{10.5pt}}}%
+    \lead{#2}{\color{blendink}\nobreakspace\textemdash\penalty0\hspace{0.35em}#3}\par
+  \endgroup}
+
+% Metrics.
+\newenvironment{metricrow}[1]{%
+  \begin{tcbitemize}[raster columns=#1,raster equal height,raster column skip=13pt,
+    nobeforeafter,enhanced,colback=blendpanel,colframe=blendpanel,boxrule=0pt,arc=1pt,
+    left=13pt,right=10pt,top=9pt,bottom=8pt,valign=top,
+    borderline west={2.2pt}{0pt}{blendblue},
+    before upper={\setlength{\parskip}{0pt}\raggedright}]%
+}{%
+  \end{tcbitemize}\vspace{7pt}%
+}
+
+\newcommand{\metric}[2]{%
+  \tcbitem {\displayfont\bfseries\fontsize{21}{21.5}\selectfont\color{blendnavy}#1}\\[4pt]
+  {\caps{\color{blendmuted}\MakeUppercase{#2}}}}
+
+% Quantified outcome bullets.
+\newcommand{\outcome}[1]{%
+  \par\vspace{4.5pt}\needspace{2\baselineskip}%
+  \begingroup
+    \fontsize{8.95}{13.1}\selectfont\color{blendink}\RaggedRight\hyphenpenalty=5000%
+    \hangindent=18pt\hangafter=1
+    \noindent\makebox[18pt][l]{%
+      \raisebox{0.62ex}{\color{blendblue}\rule{8pt}{1.6pt}}}%
+    #1\par
+  \endgroup}
+
+% Best-fit callout.
+\newtcolorbox{bestfitbox}[1]{
+  enhanced,colback=blendpanel,colframe=blendpanel,boxrule=0pt,arc=1pt,
+  left=12pt,right=12pt,top=10pt,bottom=10pt,
+  borderline west={2pt}{0pt}{blendblue},
+  before upper={\setlength{\parskip}{0pt}%
+    {\addfontfeatures{LetterSpace=4}\fontsize{7.8}{9.6}\selectfont\bfseries\color{blendnavy}\MakeUppercase{#1}\par}
+    \vspace{5pt}}}
+
+% Visual-evidence cards. Cards can contain either text only or an image.
+\newenvironment{evidencerow}{%
+  \begin{tcbitemize}[raster columns=3,raster equal height,raster column skip=11pt,
+    raster row skip=11pt,nobeforeafter,enhanced,colback=blendpaneltwo,
+    colframe=blendhair,boxrule=0.45pt,arc=1pt,left=10pt,right=10pt,
+    top=9pt,bottom=9pt,valign=top,borderline north={1.7pt}{0pt}{blendblue},
+    before upper={\setlength{\parskip}{0pt}\RaggedRight}]%
+}{%
+  \end{tcbitemize}\vspace{3pt}%
+}
+
+\newcommand{\evidencecard}[3]{%
+  \tcbitem
+  {\caps{\color{blendblue}SOURCE EVIDENCE}\par}\vspace{5pt}
+  {\fontsize{9}{11.2}\selectfont\bfseries\color{blendnavy}#1\par}\vspace{4pt}
+  {\fontsize{8.15}{11.4}\selectfont\color{blendink}#2\par}\vspace{6pt}
+  {\fontsize{6.9}{9.2}\selectfont\bfseries\color{blendmuted}#3\par}}
+
+\newcommand{\evidenceimagecard}[4]{%
+  \tcbitem
+  \begin{center}
+    \includegraphics[width=\linewidth,height=1.22in,keepaspectratio]{#1}
+  \end{center}
+  \vspace{3pt}
+  {\fontsize{9}{11.2}\selectfont\bfseries\color{blendnavy}#2\par}\vspace{4pt}
+  {\fontsize{8.05}{11.2}\selectfont\color{blendink}#3\par}\vspace{5pt}
+  {\fontsize{6.9}{9.2}\selectfont\bfseries\color{blendmuted}#4\par}}
+
+% Caveats.
+\newtcolorbox{caveatbox}[1]{
+  enhanced,colback=amberbg,colframe=amberbg,boxrule=0pt,arc=1pt,
+  left=13pt,right=13pt,top=10pt,bottom=10pt,
+  borderline north={1.8pt}{0pt}{amberacc},
+  before upper={\setlength{\parskip}{0pt}%
+    {\addfontfeatures{LetterSpace=4}\fontsize{8.2}{10}\selectfont\bfseries\color{amberink}\MakeUppercase{#1}\par}
+    \vspace{5pt}}}
+
+\newcommand{\caveat}[2]{%
+  \par\vspace{4.5pt}\needspace{2\baselineskip}%
+  \begingroup
+    \fontsize{8.4}{11.5}\selectfont\color{ambertxt}\RaggedRight\hyphenpenalty=5000%
+    \hangindent=32pt\hangafter=1
+    \noindent\makebox[32pt][l]{%
+      {\bfseries\fontsize{8.1}{11.5}\selectfont\color{amberacc}#1}%
+      \hspace{5pt}{\color{amberacc}\rule[-2pt]{0.65pt}{9.5pt}}}%
+    #2\par
+  \endgroup}
+
+% Sources.
+\newcommand{\source}[2]{%
+  \par\noindent\hangindent=13pt\hangafter=1
+  {\fontsize{7.7}{10.7}\selectfont\color{blendmuted}\RaggedRight\hyphenpenalty=5000%
+   {\bfseries\color{blendnavy}#1.}~#2\par}\vspace{4pt}}
+
+\endinput

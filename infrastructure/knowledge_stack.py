@@ -203,6 +203,19 @@ class KnowledgeStack(Stack):
             "name_invitations_enabled",
             self.node.try_get_context("name_invitations_enabled"),
         )
+        # TEMPORARY HACKATHON DEMO HACK:
+        # Blend360 quarantines the Cognito verification message, so the demo
+        # may admit verified gmail.com identities. Keep this disabled outside
+        # the hackathon and remove it when Blend Microsoft SSO is enabled.
+        demo_allow_gmail_logins = _context_flag(
+            "demo_allow_gmail_logins",
+            self.node.try_get_context("demo_allow_gmail_logins"),
+        )
+        allowed_login_email_domains = (
+            ("blend360.com", "gmail.com")
+            if demo_allow_gmail_logins
+            else ("blend360.com",)
+        )
         initial_admin_emails = sorted(
             {
                 email.strip().casefold()
@@ -214,15 +227,22 @@ class KnowledgeStack(Stack):
             }
         )
         if not initial_admin_emails or any(
-            re.fullmatch(
-                r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@blend360\.com",
-                email,
+            (
+                re.fullmatch(
+                    r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+                    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                    r"[a-z]{2,63}",
+                    email,
+                )
+                is None
+                or email.rsplit("@", maxsplit=1)[1]
+                not in allowed_login_email_domains
             )
-            is None
             for email in initial_admin_emails
         ):
             raise ValueError(
-                "initial_admin_emails must contain valid @blend360.com emails"
+                "initial_admin_emails must contain valid addresses from the "
+                "configured login domains"
             )
         public_base_url = _public_base_url(
             self.node.try_get_context("mcp_public_base_url")
@@ -316,9 +336,7 @@ class KnowledgeStack(Stack):
             else None
         )
         if cognito_use_ses_email and ses_from_address is None:
-            raise ValueError(
-                "cognito_use_ses_email requires email_domain"
-            )
+            raise ValueError("cognito_use_ses_email requires email_domain")
 
         document_bucket = s3.Bucket(
             self,
@@ -456,23 +474,30 @@ class KnowledgeStack(Stack):
             group_name="admins",
             description="Global Relay administrators",
         )
-        pre_signup_function = lambda_.Function(
-            self,
-            "BlendEmailPreSignUpFunction",
-            runtime=lambda_.Runtime.PYTHON_3_13,
-            handler="index.handler",
-            code=lambda_.Code.from_inline(
-                """
+        pre_signup_code = (
+            "# TEMPORARY HACKATHON DEMO HACK: gmail.com may be in this set "
+            "only because Blend quarantines Cognito email. Remove the "
+            "deployment flag when Microsoft SSO is enabled.\n"
+            "ALLOWED_EMAIL_DOMAINS = frozenset("
+            f"{allowed_login_email_domains!r})\n\n"
+            """
 def handler(event, context):
     del context
     attributes = event.get("request", {}).get("userAttributes", {})
     email = str(attributes.get("email") or "").strip().casefold()
     local, separator, domain = email.rpartition("@")
-    if not separator or not local or domain != "blend360.com":
-        raise ValueError("Only @blend360.com employees may register")
+    if not separator or not local or domain not in ALLOWED_EMAIL_DOMAINS:
+        allowed = ", ".join(f"@{value}" for value in ALLOWED_EMAIL_DOMAINS)
+        raise ValueError(f"Registration requires an email from: {allowed}")
     return event
 """.strip()
-            ),
+        )
+        pre_signup_function = lambda_.Function(
+            self,
+            "BlendEmailPreSignUpFunction",
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            handler="index.handler",
+            code=lambda_.Code.from_inline(pre_signup_code),
             timeout=Duration.seconds(10),
             memory_size=128,
             log_retention=logs.RetentionDays.ONE_WEEK,
@@ -1180,6 +1205,9 @@ function handler(event) {
                 **email_environment,
                 "USER_POOL_ID": user_pool.user_pool_id,
                 "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
+                "ALLOWED_LOGIN_EMAIL_DOMAINS": ",".join(
+                    allowed_login_email_domains
+                ),
                 "MCP_AUTH_ENABLED": ("true" if mcp_auth_enabled else "false"),
                 "MCP_COGNITO_CLIENT_ID": (
                     mcp_identity_client.user_pool_client_id
@@ -1266,6 +1294,23 @@ function handler(event) {
             email_identity.grant_send_email(task_role)
             email_identity.grant_send_email(review_function)
             email_identity.grant_send_email(notification_function)
+            # SES authorization evaluates both the sender identity and verified
+            # recipient identities while the account remains in the sandbox.
+            # The identity-scoped grants above therefore reject even verified
+            # recipients outside our domain. Keep the resource wildcard tightly
+            # constrained to Relay's configured From address.
+            outbound_email_policy = iam.PolicyStatement(
+                actions=["ses:SendEmail"],
+                resources=["*"],
+                conditions={
+                    "StringEquals": {
+                        "ses:FromAddress": ses_from_address,
+                    }
+                },
+            )
+            task_role.add_to_policy(outbound_email_policy)
+            review_function.add_to_role_policy(outbound_email_policy)
+            notification_function.add_to_role_policy(outbound_email_policy)
 
         ingestion_role = ingestion_function.role
         review_role = review_function.role

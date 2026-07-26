@@ -106,6 +106,9 @@ class FakeOAuthStore:
 class OAuthSettings:
     aws_region: str = "us-east-1"
     user_pool_id: str = "us-east-1_example"
+    allowed_login_email_domains: frozenset[str] = frozenset(
+        {"blend360.com", "gmail.com"}
+    )
     mcp_cognito_client_id: str = "cognito-client"
     mcp_cognito_domain: str = "https://login.example.com"
     mcp_public_base_url: str = "https://d111111abcdef8.cloudfront.net"

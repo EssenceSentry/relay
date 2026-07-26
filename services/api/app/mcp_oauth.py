@@ -41,6 +41,9 @@ class CognitoMcpSettings(Protocol):
     def user_pool_id(self) -> str: ...
 
     @property
+    def allowed_login_email_domains(self) -> frozenset[str]: ...
+
+    @property
     def mcp_cognito_client_id(self) -> str: ...
 
     @property
@@ -94,6 +97,7 @@ class CognitoMcpOAuthProvider:
             region=settings.aws_region,
             user_pool_id=settings.user_pool_id,
             client_id=settings.mcp_cognito_client_id,
+            allowed_email_domains=settings.allowed_login_email_domains,
         )
 
     async def get_client(

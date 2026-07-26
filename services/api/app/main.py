@@ -31,9 +31,7 @@ if container.settings.mcp_auth_enabled:
     )
     auth_settings = build_mcp_auth_settings(container.settings)
 else:
-    raise RuntimeError(
-        "MCP authentication is required in API/MCP contract v1"
-    )
+    raise RuntimeError("MCP authentication is required in API/MCP contract v1")
 mcp = build_mcp_server(
     container,
     oauth_provider=oauth_provider,
@@ -50,7 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(
-    title="Blend Project Knowledge API",
+    title="Relay API",
     version="1.0.0",
     lifespan=lifespan,
 )

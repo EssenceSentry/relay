@@ -312,7 +312,9 @@ class InvitationTable:
         }
 
 
-def test_declining_name_match_invitation_writes_suppression_atomically() -> None:
+def test_declining_name_match_invitation_writes_suppression_atomically() -> (
+    None
+):
     table = InvitationTable()
     repository = KnowledgeRepository.__new__(KnowledgeRepository)
     repository._table = table  # type: ignore[assignment]

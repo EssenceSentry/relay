@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "blend-project-knowledge",
+      "name": "relay",
       "source": {
         "source": "local",
-        "path": "./plugins/blend-project-knowledge"
+        "path": "./plugins/relay"
       },
       "policy": {
         "installation": "AVAILABLE",

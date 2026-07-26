@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -24,10 +25,12 @@ from app.mcp_models import (
     McpCollaborationInvitation,
     McpCollaborator,
     McpCurrentUser,
+    McpDirectoryUser,
     McpDocumentDownload,
     McpDocumentSummary,
     McpDocumentText,
     McpDocumentUpload,
+    McpDossierRender,
     McpNotification,
     McpProject,
     McpQuestion,
@@ -40,6 +43,7 @@ from knowledge_core.ids import stable_action_id
 from knowledge_core.models import (
     AnswerSubmit,
     CollaboratorInviteCreate,
+    DossierRenderRequest,
     HumanAnswerReviewRequest,
     InvitationDecisionRequest,
     KnowledgeGapCreate,
@@ -58,11 +62,15 @@ ProjectId = Annotated[
 ]
 DocumentId = Annotated[
     str,
-    Field(min_length=1, max_length=128, description="Exact document identifier"),
+    Field(
+        min_length=1, max_length=128, description="Exact document identifier"
+    ),
 ]
 QuestionId = Annotated[
     str,
-    Field(min_length=1, max_length=128, description="Exact question identifier"),
+    Field(
+        min_length=1, max_length=128, description="Exact question identifier"
+    ),
 ]
 AnswerId = Annotated[
     str,
@@ -84,6 +92,15 @@ QueryText = Annotated[
     str,
     Field(min_length=2, max_length=4_000, description="Natural-language query"),
 ]
+DirectoryQuery = Annotated[
+    str,
+    Field(
+        min_length=2,
+        max_length=200,
+        description="Person's name or exact known email address",
+    ),
+]
+DirectoryLimit = Annotated[int, Field(ge=1, le=10)]
 TopK = Annotated[
     int,
     Field(
@@ -117,6 +134,24 @@ FactProvenance = Annotated[str, Field(min_length=2, max_length=2_000)]
 BriefProjectName = Annotated[str, Field(min_length=2, max_length=300)]
 BriefContext = Annotated[str | None, Field(max_length=4_000)]
 DownloadFormat = Annotated[Literal["original", "markdown"], Field()]
+DossierMarkdown = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=200_000,
+        description=(
+            "Complete final dossier Markdown following the Relay dossier "
+            "section contract, including inline source citations"
+        ),
+    ),
+]
+DossierFilenameStem = Annotated[
+    str | None,
+    Field(
+        max_length=96,
+        description="Optional human-readable filename without an extension",
+    ),
+]
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -148,9 +183,7 @@ _DESTRUCTIVE_EXTERNAL_WRITE = ToolAnnotations(
     idempotentHint=True,
     openWorldHint=True,
 )
-_OAUTH_META = {
-    "securitySchemes": [{"type": "oauth2", "scopes": [MCP_SCOPE]}]
-}
+_OAUTH_META = {"securitySchemes": [{"type": "oauth2", "scopes": [MCP_SCOPE]}]}
 _TEST_META = {"securitySchemes": [{"type": "noauth"}]}
 _SALES_BRIEF_PROMPT_PATH = (
     Path(__file__).resolve().parents[3]
@@ -178,42 +211,69 @@ def _server_instructions(container: ServiceContainer) -> str:
     web_url = _web_application_url(container) or "the deployment website"
     return "\n".join(
         [
-            "Use Blend Project Knowledge as the source of truth for project work.",
+            "Use Relay as the source of truth for project work.",
             (
                 "1. Call get_current_user when permissions matter. If an exact "
-                "project_id is unknown, call list_projects; never invent an ID."
+                "project_id is unknown, locate it through search_all_projects; "
+                "never invent an ID."
             ),
             (
-                "2. For evidence questions, call search_project_knowledge with "
-                "several focused queries. Search results are previews; open "
-                "material sources with get_document_text before making claims."
+                "2. For evidence questions, begin with several focused "
+                "search_all_projects queries. Open material hits with "
+                "get_document_text, then use search_project_knowledge only to "
+                "deepen or disambiguate a likely project."
             ),
             (
                 "3. Cite document name plus page, slide, or locator. Treat "
                 "retrieval scores as ranking signals, not proof."
             ),
             (
-                "4. For uploads, call prepare_document_upload only when the "
+                "4. Do not list projects, enumerate project documents, and "
+                "read everything as a retrieval strategy. Use list_projects "
+                "and list_project_documents for explicit inventory, "
+                "administration, status checks, or only as a last resort "
+                "after search fails."
+            ),
+            (
+                "5. For uploads, call prepare_document_upload only when the "
                 "client can send a local file to the returned presigned S3 "
                 "POST. Otherwise direct the user to its fallback_url. Poll "
                 "get_document until READY or FAILED."
             ),
             (
-                "5. Use list_my_notifications, "
+                "6. Use list_my_notifications, "
                 "list_my_collaboration_invitations, and "
                 "list_my_assigned_questions for inbox work. Inspect a question "
                 "and its answers before responding or reviewing."
             ),
             (
-                "6. Get explicit user confirmation before sending email, "
+                "7. Every authenticated reader may create and answer project "
+                "questions. can_edit=false limits project content changes; it "
+                "does not prevent create_project_question. Non-collaborator "
+                "answers require member review."
+            ),
+            (
+                "8. When a requested answerer is named but no exact email is "
+                "known, call search_user_directory. Use only a unique match; "
+                "ask the user to disambiguate multiple results and never "
+                "construct an address from a name."
+            ),
+            (
+                "9. Get explicit user confirmation before sending email, "
                 "inviting or removing collaborators, archiving a project, "
                 "rejecting an answer, or creating a verified fact. Never store "
                 "an inference as verified fact."
             ),
             (
-                "7. If project evidence is insufficient, explain the gap and "
+                "10. If project evidence is insufficient, explain the gap and "
                 "only then consider create_project_question. Reuse request_id "
                 "when retrying any write."
+            ),
+            (
+                "11. For a finished project dossier, follow the dossier skill "
+                "and its inline-citation contract, then call "
+                "render_project_dossier with the complete final Markdown. "
+                "Return both expiring DOCX and PDF links."
             ),
             (
                 "For participant sales briefs, use the "
@@ -234,7 +294,7 @@ def build_mcp_server(
     tool_meta = _OAUTH_META if auth_settings is not None else _TEST_META
     application = KnowledgeApplication(container)
     mcp = FastMCP(
-        "Blend Project Knowledge",
+        "Relay",
         instructions=_server_instructions(container),
         website_url=_web_application_url(container),
         host="0.0.0.0",
@@ -359,6 +419,23 @@ def build_mcp_server(
         return McpCurrentUser.model_validate(
             call(lambda: application.get_current_user(current_principal()))
         )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def search_user_directory(
+        query: DirectoryQuery,
+        limit: DirectoryLimit = 8,
+    ) -> list[McpDirectoryUser]:
+        """Resolve a person's name to verified users before targeting email."""
+        return [
+            McpDirectoryUser.model_validate(item)
+            for item in call(
+                lambda: application.search_user_directory(
+                    query,
+                    principal=current_principal(),
+                    limit=limit,
+                )
+            )
+        ]
 
     @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
     def list_projects(
@@ -669,6 +746,28 @@ def build_mcp_server(
             expires_in_seconds=download.expires_in_seconds,
         )
 
+    @mcp.tool(annotations=_INTERNAL_WRITE, meta=tool_meta)
+    def render_project_dossier(
+        project_id: ProjectId,
+        markdown: DossierMarkdown,
+        request_id: RequestId,
+        filename_stem: DossierFilenameStem = None,
+    ) -> McpDossierRender:
+        """Render final cited Markdown to private DOCX and PDF download links."""
+        rendered = call(
+            lambda: application.render_project_dossier(
+                project_id,
+                DossierRenderRequest(
+                    markdown=markdown,
+                    filename_stem=filename_stem,
+                    request_id=request_id,
+                ),
+                principal=current_principal(),
+                request_id=request_id,
+            )
+        )
+        return McpDossierRender.model_validate(asdict(rendered))
+
     @mcp.tool(annotations=_EXTERNAL_WRITE, meta=tool_meta)
     def prepare_document_upload(
         project_id: ProjectId,
@@ -810,7 +909,7 @@ def build_mcp_server(
         context: QuestionContext = None,
         priority: Literal["low", "normal", "high"] = "normal",
     ) -> McpQuestion:
-        """Create a knowledge question; confirm because members may be emailed."""
+        """Create as any reader; resolve named targets first and confirm email."""
         question_id = stable_action_id(
             prefix="gap",
             project_id=project_id,

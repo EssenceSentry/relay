@@ -9,6 +9,7 @@ from mcp.types import TextContent
 
 EXPECTED_V1_TOOLS = {
     "get_current_user",
+    "search_user_directory",
     "list_my_notifications",
     "mark_notification_read",
     "list_my_collaboration_invitations",
@@ -28,6 +29,7 @@ EXPECTED_V1_TOOLS = {
     "get_document",
     "get_document_text",
     "get_document_download_url",
+    "render_project_dossier",
     "prepare_document_upload",
     "list_verified_facts",
     "create_verified_fact",
@@ -53,6 +55,7 @@ REQUEST_ID_TOOLS = {
     "create_project",
     "invite_project_collaborator",
     "prepare_document_upload",
+    "render_project_dossier",
     "create_verified_fact",
     "create_project_question",
     "submit_question_answer",
@@ -76,7 +79,10 @@ def test_v1_tool_catalog_is_complete_and_old_names_are_absent() -> None:
 
     assert set(tools) == EXPECTED_V1_TOOLS
     assert OLD_TOOL_NAMES.isdisjoint(tools)
-    assert all(tool.meta == {"securitySchemes": [{"type": "noauth"}]} for tool in tools.values())
+    assert all(
+        tool.meta == {"securitySchemes": [{"type": "noauth"}]}
+        for tool in tools.values()
+    )
     for name in REQUEST_ID_TOOLS:
         assert "request_id" in tools[name].inputSchema["required"]
 
@@ -116,6 +122,11 @@ def test_tool_catalog_exposes_bounded_inputs_and_safety_annotations() -> None:
     }:
         assert tools[name].annotations.openWorldHint is True
 
+    render = tools["render_project_dossier"]
+    assert render.annotations.openWorldHint is False
+    assert render.annotations.destructiveHint is False
+    assert render.inputSchema["properties"]["markdown"]["maxLength"] == 200_000
+
     assert tools["resend_question_email"].annotations.idempotentHint is True
 
 
@@ -132,6 +143,8 @@ def test_server_guides_agents_through_v1_workflows() -> None:
     assert server.instructions is not None
     for text in (
         "get_current_user",
+        "search_user_directory",
+        "search_all_projects",
         "list_projects",
         "search_project_knowledge",
         "get_document_text",
@@ -141,8 +154,18 @@ def test_server_guides_agents_through_v1_workflows() -> None:
         "explicit user confirmation",
         "create_project_question",
         "participant_sales_brief_generation prompt",
+        "render_project_dossier",
     ):
         assert text in server.instructions
+    assert (
+        "Every authenticated reader may create and answer"
+        in server.instructions
+    )
+    assert "can_edit=false" in server.instructions
+    assert (
+        "Do not list projects, enumerate project documents, and read everything"
+        in server.instructions
+    )
 
 
 def test_sales_brief_prompt_requires_grounded_inline_citations() -> None:
@@ -178,7 +201,9 @@ def test_sales_brief_prompt_requires_grounded_inline_citations() -> None:
     assert "Project ID: `prj_1`" in text
     assert "Project or case-study name: `Project One`" in text
     assert "Emphasize supply-chain outcomes." in text
+    assert "`search_all_projects`" in text
     assert "`search_project_knowledge`" in text
     assert "Cite every material factual claim inline" in text
     assert "section alone does not satisfy the citation requirement" in text
-    assert "Use `get_document_text` for every document" in text
+    assert "Use `get_document_text` for the strongest" in text
+    assert "Do not enumerate and read all project documents" in text

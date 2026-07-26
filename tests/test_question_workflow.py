@@ -48,7 +48,9 @@ class FailingSender:
 class ExplodingSender:
     def send_question(self, question: dict[str, Any]) -> EmailSendResult:
         del question
-        raise AssertionError("An untargeted question must not send direct email")
+        raise AssertionError(
+            "An untargeted question must not send direct email"
+        )
 
 
 def _gap() -> KnowledgeGapCreate:

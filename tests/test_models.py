@@ -19,6 +19,15 @@ def test_knowledge_gap_normalizes_email() -> None:
     assert gap.assigned_expert_email == "expert@blend360.com"
 
 
+def test_knowledge_gap_accepts_a_verified_demo_account_address() -> None:
+    gap = KnowledgeGapCreate(
+        question="Who was the delivery lead?",
+        assigned_expert_email=" Essence.Sentry@Gmail.COM ",
+    )
+
+    assert gap.assigned_expert_email == "essence.sentry@gmail.com"
+
+
 def test_knowledge_gap_rejects_unknown_priority() -> None:
     with pytest.raises(ValidationError):
         KnowledgeGapCreate(

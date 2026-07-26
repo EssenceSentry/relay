@@ -19,7 +19,7 @@ if [[ -f "$ROOT/.env" ]]; then
         MICROSOFT_SSO_SECRET_NAME | MCP_AUTH_ENABLED | PUBLIC_DOMAIN | \
         MCP_PUBLIC_BASE_URL | OPENSEARCH_ADMIN_PRINCIPAL_ARN | \
         INITIAL_ADMIN_EMAILS | NAME_INVITATIONS_ENABLED | \
-        COGNITO_USE_SES_EMAIL)
+        COGNITO_USE_SES_EMAIL | DEMO_ALLOW_GMAIL_LOGINS)
         if [[ -z "${!key:-}" ]]; then
           printf -v "$key" "%s" "$value"
           export "$key"
@@ -69,6 +69,14 @@ if [[ -n "${MCP_AUTH_ENABLED:-}" ]]; then
 fi
 if [[ -n "${INITIAL_ADMIN_EMAILS:-}" ]]; then
   CDK_CONTEXT+=("-c" "initial_admin_emails=${INITIAL_ADMIN_EMAILS}")
+fi
+# TEMPORARY HACKATHON DEMO HACK: permits verified Gmail identities because
+# Blend quarantines Cognito mail. Remove this flag when Microsoft SSO is used.
+if [[ -n "${DEMO_ALLOW_GMAIL_LOGINS:-}" ]]; then
+  CDK_CONTEXT+=(
+    "-c"
+    "demo_allow_gmail_logins=${DEMO_ALLOW_GMAIL_LOGINS}"
+  )
 fi
 if [[ -n "${NAME_INVITATIONS_ENABLED:-}" ]]; then
   CDK_CONTEXT+=(

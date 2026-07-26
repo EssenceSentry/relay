@@ -1,18 +1,19 @@
 # Blend360 project dossier format
 
 Use this contract for project dossiers, participant sales briefs, success
-stories, capability stories, and case-study summaries created from Blend
-Project Knowledge.
+stories, capability stories, and case-study summaries created from Relay.
 
 ## Default artifact
 
-Unless the user requests another form, produce a polished, shareable, one-page
-sales brief for one project. It must be useful to Blend360 sales, delivery, and
-account teams as a credible capability story, not as a generic marketing
-template or a summary written from memory.
+Unless the user requests another form, produce a polished, shareable,
+three-page executive dossier for one project. It must be useful to Blend360
+sales, delivery, and account teams as a credible capability story, not as a
+generic marketing template or a summary written from memory.
 
-Return only the finished Markdown artifact. Do not include research narration,
-retrieval scores, or an explanation of how the artifact was made.
+Use the finished Markdown as the exact input to `render_project_dossier`.
+Return the generated DOCX and PDF links, without research narration, retrieval
+scores, or an explanation of how the artifact was made. Return Markdown alone
+only when the user explicitly asks for it.
 
 ## Non-negotiable evidence rules
 
@@ -73,7 +74,12 @@ List three to five specific capabilities:
 List only measurable, directly sourced results such as time or cost reduction,
 revenue impact, accuracy, speed, adoption, coverage, volume, processing time,
 model count, or feature count. Do not turn goals, projections, or capabilities
-into achieved outcomes.
+into achieved outcomes. Put each metric in a labeled Markdown bullet so the
+renderer can create metric cards:
+
+```text
+- **40% CTR lift** — Compared with the legacy system. ([Source], slide N)
+```
 
 ### Business Value
 
@@ -134,10 +140,12 @@ Generated [DATE] — Sales Brief
 ```
 
 Omit **Relevant Visual Evidence** when it adds no substantive information.
+Do not rename any required level-two heading; the renderer validates these
+headings before producing the files.
 
 ## Style
 
-- Executive, business-facing, and concise enough for a one-page brief.
+- Executive, business-facing, and concise enough for the three-page layout.
 - Short paragraphs and scannable bullets.
 - Specific evidence instead of hype.
 - Minimal internal implementation jargon unless central to the project.

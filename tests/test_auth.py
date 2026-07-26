@@ -30,6 +30,9 @@ def _container(*, auth_enabled: bool) -> Any:
             aws_region="us-east-1",
             user_pool_id="us-east-1_example",
             user_pool_client_id="client-id",
+            allowed_login_email_domains=frozenset(
+                {"blend360.com", "gmail.com"}
+            ),
         )
     )
 
@@ -57,6 +60,7 @@ def _verifier(monkeypatch: pytest.MonkeyPatch, claims: dict[str, Any]):
         region="us-east-1",
         user_pool_id="us-east-1_example",
         client_id="client-id",
+        allowed_email_domains=frozenset({"blend360.com", "gmail.com"}),
     )
     verifier._jwk_client = FakeSigningKeyClient()  # pyright: ignore[reportPrivateUsage]
 
@@ -68,7 +72,7 @@ def _verifier(monkeypatch: pytest.MonkeyPatch, claims: dict[str, Any]):
     return verifier
 
 
-def test_cognito_verifier_requires_verified_blend_email(
+def test_cognito_verifier_requires_verified_allowed_email(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     unverified = _verifier(
@@ -96,6 +100,25 @@ def test_cognito_verifier_requires_verified_blend_email(
     with pytest.raises(HTTPException) as external_error:
         external.verify("valid-token")
     assert external_error.value.status_code == 403
+
+
+def test_cognito_verifier_accepts_verified_gmail_for_demo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier(
+        monkeypatch,
+        {
+            "sub": "user-2",
+            "email": "Essence_Sentry@Gmail.COM",
+            "email_verified": True,
+            "token_use": "id",
+        },
+    )
+
+    principal = verifier.verify("valid-token")
+
+    assert principal.email == "essence_sentry@gmail.com"
+    assert not principal.is_admin
 
 
 def test_cognito_verifier_returns_groups_and_normalized_email(

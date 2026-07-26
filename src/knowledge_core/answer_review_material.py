@@ -41,7 +41,9 @@ def build_answer_review_material(
     if not answers:
         return answer_history, bool(answer_history.strip())
     document_ids: list[str] = []
-    has_text = any(str(answer.get("answer") or "").strip() for answer in answers)
+    has_text = any(
+        str(answer.get("answer") or "").strip() for answer in answers
+    )
     attachment_warnings: list[str] = []
     for answer in answers[-6:]:
         supporting_document_ids = _DOCUMENT_ID_LIST_ADAPTER.validate_python(

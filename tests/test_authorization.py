@@ -12,6 +12,8 @@ from app.application import (
 )
 from app.auth import Principal
 
+from knowledge_core.models import KnowledgeGapCreate
+
 
 class FakeRepository:
     def __init__(self, *, archived: bool = False, member: bool = False) -> None:
@@ -33,6 +35,23 @@ class FakeRepository:
         return self.member
 
 
+class FakeQuestions:
+    def create_question(
+        self,
+        *,
+        project_id: str,
+        gap: KnowledgeGapCreate,
+        created_by: str,
+        question_id: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "project_id": project_id,
+            "gap": gap,
+            "created_by": created_by,
+            "question_id": question_id,
+        }
+
+
 def _principal(
     *,
     admin: bool = False,
@@ -40,11 +59,7 @@ def _principal(
 ) -> Principal:
     return Principal(
         subject="user-1",
-        email=(
-            "public@hackathon.local"
-            if public
-            else "employee@blend360.com"
-        ),
+        email=("public@hackathon.local" if public else "employee@blend360.com"),
         groups=frozenset({"admins"} if admin else set()),
         claims={"authentication_mode": "public"} if public else {},
     )
@@ -73,8 +88,9 @@ def test_project_writes_require_member_or_admin() -> None:
         authorization.require_member("prj_1", principal=_principal())
 
     assert (
-        _authorization(FakeRepository(member=True))
-        .require_member("prj_1", principal=_principal())["project_id"]
+        _authorization(FakeRepository(member=True)).require_member(
+            "prj_1", principal=_principal()
+        )["project_id"]
         == "prj_1"
     )
     assert (
@@ -86,12 +102,31 @@ def test_project_writes_require_member_or_admin() -> None:
     )
 
 
+def test_verified_reader_can_create_a_project_question() -> None:
+    application = KnowledgeApplication(
+        SimpleNamespace(
+            repository=FakeRepository(),
+            questions=FakeQuestions(),
+        ),  # pyright: ignore[reportArgumentType]
+    )
+
+    created = application.create_project_question(
+        "prj_1",
+        KnowledgeGapCreate(question="Who owned the rollout?"),
+        principal=_principal(),
+    )
+
+    assert created["project_id"] == "prj_1"
+    assert created["created_by"] == "employee@blend360.com"
+
+
 def test_public_mode_cannot_use_authenticated_write_operations() -> None:
     with pytest.raises(AuthenticationRequired):
         _authorization(FakeRepository(member=True)).require_member(
             "prj_1",
             principal=_principal(public=True),
         )
+
 
 def test_only_admin_can_read_archived_projects() -> None:
     authorization = _authorization(FakeRepository(archived=True))

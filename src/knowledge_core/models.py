@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from knowledge_core.identity import normalize_email as normalize_blend_email
+from knowledge_core.identity import normalize_blend_email, normalize_email
 
 
 class DocumentStatus(StrEnum):
@@ -260,6 +260,36 @@ class UploadRequest(BaseModel):
     )
 
 
+class DossierRenderRequest(BaseModel):
+    markdown: str = Field(min_length=1, max_length=200_000)
+    filename_stem: str | None = Field(default=None, max_length=96)
+    request_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+    @field_validator("markdown")
+    @classmethod
+    def normalize_markdown(cls, value: str) -> str:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise ValueError("Dossier Markdown cannot be empty")
+        return normalized
+
+    @field_validator("filename_stem")
+    @classmethod
+    def normalize_filename_stem(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=4000)
     top_k: int = Field(default=8, ge=1, le=25)
@@ -280,7 +310,7 @@ class KnowledgeGapCreate(BaseModel):
     def normalize_email(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return normalize_blend_email(value)
+        return normalize_email(value)
 
 
 class AnswerSubmit(BaseModel):
