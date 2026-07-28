@@ -38,6 +38,13 @@ def test_search_response_uses_bounded_previews_and_safe_warnings() -> None:
     assert result.hits[0].page_number == 3
     assert result.hits[0].locator == "page 3 of 8"
     assert result.warnings == ["Vector retrieval is temporarily unavailable."]
+    assert "do not stop after reporting the gap" in (
+        result.insufficient_evidence_action
+    )
+    assert "call get_project and list_project_collaborators" in (
+        result.insufficient_evidence_action
+    )
+    assert "explicit user confirmation" in result.insufficient_evidence_action
 
 
 def test_document_text_concatenates_pages_and_references_original() -> None:

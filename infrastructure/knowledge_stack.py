@@ -1208,6 +1208,7 @@ function handler(event) {
                 "ALLOWED_LOGIN_EMAIL_DOMAINS": ",".join(
                     allowed_login_email_domains
                 ),
+                "INITIAL_ADMIN_EMAILS": ",".join(initial_admin_emails),
                 "MCP_AUTH_ENABLED": ("true" if mcp_auth_enabled else "false"),
                 "MCP_COGNITO_CLIENT_ID": (
                     mcp_identity_client.user_pool_client_id
@@ -1460,6 +1461,7 @@ function handler(event) {
             "token",
             "register",
             "oauth/*",
+            "api/downloads/*",
         ):
             distribution.add_behavior(
                 path_pattern,

@@ -25,6 +25,21 @@ class Principal:
         return "admins" in self.groups
 
 
+def with_configured_admin(
+    principal: Principal,
+    configured_admin_emails: frozenset[str],
+) -> Principal:
+    """Apply durable email-configured admin access to a verified principal."""
+    if principal.is_admin or principal.email not in configured_admin_emails:
+        return principal
+    return Principal(
+        subject=principal.subject,
+        email=principal.email,
+        groups=principal.groups | {"admins"},
+        claims=principal.claims,
+    )
+
+
 class CognitoVerifier:
     def __init__(
         self,
@@ -152,7 +167,10 @@ def make_principal_dependency(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing bearer token",
             )
-        principal = verifier.verify(credentials.credentials)
+        principal = with_configured_admin(
+            verifier.verify(credentials.credentials),
+            container.settings.initial_admin_emails,
+        )
         existing = container.repository.get_user_profile(principal.email)
         display_name = str(principal.claims.get("name") or "").strip()
         if not display_name:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -9,8 +10,11 @@ from botocore.exceptions import ClientError
 
 from app.auth import Principal
 from app.document_downloads import (
+    DOWNLOAD_EXPIRY_SECONDS,
+    DocumentDownloadSession,
     DocumentDownloadUnavailable,
-    presign_document_download,
+    content_disposition,
+    resolve_document_download,
 )
 from app.services import ServiceContainer
 from knowledge_core.answer_attachments import AnswerAttachmentPromoter
@@ -330,7 +334,31 @@ class KnowledgeApplication:
         principal: Principal,
     ) -> list[dict[str, Any]]:
         self.require_member(project_id, principal=principal)
-        return self.container.repository.list_project_members(project_id)
+        members = self.container.repository.list_project_members(project_id)
+        enriched: list[dict[str, Any]] = []
+        for member in members:
+            email = str(member.get("email") or "").strip().casefold()
+            profile = (
+                self.container.repository.get_user_profile(email)
+                if email
+                else None
+            )
+            display_name = (
+                str(profile.get("display_name") or "").strip()
+                if profile is not None
+                else ""
+            )
+            enriched.append(
+                {
+                    **member,
+                    "display_name": display_name or None,
+                    "email_verified": bool(
+                        profile is not None
+                        and profile.get("email_verified") is True
+                    ),
+                }
+            )
+        return enriched
 
     def invite_project_collaborator(
         self,
@@ -514,20 +542,57 @@ class KnowledgeApplication:
         *,
         principal: Principal,
         download_format: Literal["original", "markdown"],
-    ):
+    ) -> DocumentDownloadSession:
         document = self.get_document(
             project_id,
             document_id,
             principal=principal,
         )
         try:
-            return presign_document_download(
-                s3=self.container.s3,
+            target = resolve_document_download(
                 document=document,
                 download_format=download_format,
             )
         except DocumentDownloadUnavailable as exc:
             raise Conflict(str(exc)) from exc
+        return DocumentDownloadSession(
+            url=self._issue_download_link(
+                bucket=target.bucket,
+                key=target.key,
+                filename=target.filename,
+                content_type=target.content_type,
+                expires_in_seconds=DOWNLOAD_EXPIRY_SECONDS,
+            ),
+            filename=target.filename,
+            content_type=target.content_type,
+            download_format=target.download_format,
+            expires_in_seconds=DOWNLOAD_EXPIRY_SECONDS,
+        )
+
+    def redeem_download(self, token: str) -> str:
+        session = self.container.download_sessions.get(token)
+        if (
+            session is None
+            or session.bucket != self.container.settings.document_bucket
+        ):
+            raise NotFound("Download link not found or expired")
+        expires_in_seconds = session.expires_at - int(time.time())
+        if expires_in_seconds <= 0:
+            raise NotFound("Download link not found or expired")
+        return str(
+            self.container.s3.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": session.bucket,
+                    "Key": session.key,
+                    "ResponseContentType": session.content_type,
+                    "ResponseContentDisposition": content_disposition(
+                        session.filename
+                    ),
+                },
+                ExpiresIn=expires_in_seconds,
+            )
+        )
 
     def render_project_dossier(
         self,
@@ -630,7 +695,7 @@ class KnowledgeApplication:
                 Metadata=metadata,
             )
 
-        expires_in_seconds = 900
+        expires_in_seconds = DOWNLOAD_EXPIRY_SECONDS
         docx_filename = f"{filename_stem}.docx"
         pdf_filename = f"{filename_stem}.pdf"
         return DossierRenderSession(
@@ -638,7 +703,8 @@ class KnowledgeApplication:
             render_id=render_id,
             title=content.title,
             source_sha256=source_sha256,
-            docx_url=self._presign_dossier_download(
+            docx_url=self._issue_download_link(
+                bucket=self.container.settings.document_bucket,
                 key=f"{prefix}/dossier.docx",
                 filename=docx_filename,
                 content_type=(
@@ -647,7 +713,8 @@ class KnowledgeApplication:
                 ),
                 expires_in_seconds=expires_in_seconds,
             ),
-            pdf_url=self._presign_dossier_download(
+            pdf_url=self._issue_download_link(
+                bucket=self.container.settings.document_bucket,
                 key=f"{prefix}/dossier.pdf",
                 filename=pdf_filename,
                 content_type="application/pdf",
@@ -1076,6 +1143,21 @@ class KnowledgeApplication:
         project: dict[str, Any],
         principal: Principal,
     ) -> dict[str, Any]:
+        author_email = str(project.get("created_by") or "").strip().casefold()
+        author_profile = (
+            self.container.repository.get_user_profile(author_email)
+            if author_email
+            else None
+        )
+        author_is_verified = bool(
+            author_profile is not None
+            and author_profile.get("email_verified") is True
+        )
+        author_display_name = (
+            str(author_profile.get("display_name") or "").strip()
+            if author_is_verified and author_profile is not None
+            else ""
+        )
         membership = (
             None
             if principal.is_admin
@@ -1102,6 +1184,8 @@ class KnowledgeApplication:
         )
         return {
             **project,
+            "author_display_name": author_display_name or None,
+            "author_email": author_email if author_is_verified else None,
             "my_role": role,
             "can_edit": can_edit,
             # Question participation is intentionally broader than project
@@ -1183,28 +1267,23 @@ class KnowledgeApplication:
             )
         return source_sha256
 
-    def _presign_dossier_download(
+    def _issue_download_link(
         self,
         *,
+        bucket: str,
         key: str,
         filename: str,
         content_type: str,
         expires_in_seconds: int,
     ) -> str:
-        return str(
-            self.container.s3.generate_presigned_url(
-                "get_object",
-                Params={
-                    "Bucket": self.container.settings.document_bucket,
-                    "Key": key,
-                    "ResponseContentType": content_type,
-                    "ResponseContentDisposition": (
-                        f'attachment; filename="{filename}"'
-                    ),
-                },
-                ExpiresIn=expires_in_seconds,
-            )
+        token = self.container.download_sessions.issue(
+            bucket=bucket,
+            key=key,
+            filename=filename,
+            content_type=content_type,
+            expires_in_seconds=expires_in_seconds,
         )
+        return f"{self._application_base_url()}/api/downloads/{token}"
 
     def _application_base_url(self) -> str:
         value = self.container.settings.application_base_url

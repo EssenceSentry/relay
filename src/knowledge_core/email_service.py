@@ -53,12 +53,11 @@ class SesEmailService:
         priority = str(question.get("priority") or "normal").strip().title()
         application_url = self._application_base_url
         subject = (
-            f"[Blend360] Your expertise is needed — "
-            f"{_subject_fragment(project_name, limit=72)}"
+            f"[Relay] Question for {_subject_fragment(project_name, limit=72)}"
         )
 
         text_lines = [
-            "BLEND360 PROJECT KNOWLEDGE",
+            "RELAY PROJECT KNOWLEDGE",
             "",
             "Your expertise is needed",
             f"Project: {project_name}",
@@ -165,13 +164,12 @@ class SesEmailService:
         if not details_text:
             details_text = "- Please add the concrete detail needed to fully answer the question."
         subject = (
-            f"[Blend360] One follow-up detail — "
-            f"{_subject_fragment(project_name, limit=72)}"
+            f"[Relay] Follow-up for {_subject_fragment(project_name, limit=72)}"
         )
 
         text_body = "\n".join(
             [
-                "BLEND360 PROJECT KNOWLEDGE",
+                "RELAY PROJECT KNOWLEDGE",
                 "",
                 "Thank you — one follow-up detail is needed",
                 f"Project: {project_name}",
@@ -256,8 +254,8 @@ class SesEmailService:
         action_url = str(notification.get("action_url") or "").strip()
         data = cast(dict[str, Any], notification.get("data") or {})
         project_name = str(data.get("project_name") or "").strip()
-        subject = f"[Blend360] {_subject_fragment(title, limit=96)}"
-        text_lines = ["BLEND360 PROJECT KNOWLEDGE", "", title, "", message]
+        subject = f"[Relay] {_subject_fragment(title, limit=96)}"
+        text_lines = ["RELAY PROJECT KNOWLEDGE", "", title, "", message]
         action_html = ""
         if action_url:
             text_lines.extend(["", f"Open Relay: {action_url}"])
@@ -358,7 +356,7 @@ def _html_shell(*, title: str, preheader: str, body: str) -> str:
         '<span style="display:inline-block;width:34px;height:34px;'
         "margin-right:10px;border-radius:10px;background:#e7603b;"
         "font-family:Georgia,serif;font-size:21px;font-weight:700;"
-        'line-height:34px;text-align:center;vertical-align:middle">B</span>'
+        'line-height:34px;text-align:center;vertical-align:middle">R</span>'
         '<span style="font-size:15px;font-weight:700;vertical-align:middle">'
         "Relay</span></div>"
         '<div style="padding:34px 32px;background:#fff;border-radius:0 0 18px 18px;'

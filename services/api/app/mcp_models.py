@@ -14,6 +14,13 @@ from knowledge_core.models import (
 )
 
 _PREVIEW_CHARACTERS = 1_600
+_INSUFFICIENT_EVIDENCE_ACTION = (
+    "If opened sources do not answer the project-specific question, do not "
+    "stop after reporting the gap. Before responding, call get_project and "
+    "list_project_collaborators for the relevant project, suggest the verified "
+    "author first and then other verified collaborators, and offer to draft a "
+    "question. Do not send anything without explicit user confirmation."
+)
 
 
 class McpModel(BaseModel):
@@ -45,6 +52,20 @@ class McpProject(McpModel):
     name: str
     description: str | None = None
     status: str = "ACTIVE"
+    author_display_name: str | None = Field(
+        default=None,
+        description=(
+            "Verified display name of the project author and preferred first "
+            "expert to suggest when project evidence is insufficient."
+        ),
+    )
+    author_email: str | None = Field(
+        default=None,
+        description=(
+            "Verified project-author email. Sending a question still requires "
+            "explicit user confirmation."
+        ),
+    )
     my_role: str
     can_edit: bool = Field(
         description=(
@@ -73,6 +94,14 @@ class McpProject(McpModel):
 class McpCollaborator(McpModel):
     project_id: str
     email: str
+    display_name: str | None = None
+    email_verified: bool = Field(
+        default=False,
+        description=(
+            "Whether this project member is a registered verified user who "
+            "may be suggested as a question answerer."
+        ),
+    )
     role: str
     source: str
     created_by: str | None = None
@@ -226,6 +255,13 @@ class McpSearchResponse(McpModel):
     hits: list[McpSearchHit]
     warnings: list[str]
     score_note: str
+    insufficient_evidence_action: str = Field(
+        default=_INSUFFICIENT_EVIDENCE_ACTION,
+        description=(
+            "Mandatory handoff when opened project sources cannot answer the "
+            "question."
+        ),
+    )
 
     @classmethod
     def from_search(
@@ -315,8 +351,8 @@ class McpDossierRender(McpModel):
     expires_in_seconds: int
     reused_existing_render: bool
     next_action: str = (
-        "Give the user both download links. Explain that the links expire and "
-        "rerun this tool with the same request_id to refresh them without "
+        "Give the user both Relay download links. Explain that the links expire "
+        "and rerun this tool with the same request_id to refresh them without "
         "creating another render."
     )
 

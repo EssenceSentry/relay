@@ -15,6 +15,7 @@ class HttpTestClient(Protocol):
         *,
         params: Mapping[str, str] | None = None,
         headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = True,
     ) -> Response: ...
 
     def post(

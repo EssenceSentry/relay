@@ -43,7 +43,7 @@ def test_send_question_sets_reply_to_and_web_fallback() -> None:
     assert call["FromEmailAddress"] == "questions@answers.example.com"
     assert call["Destination"] == {"ToAddresses": ["expert@example.com"]}
     assert call["ReplyToAddresses"] == [f"kg-{'a' * 48}@answers.example.com"]
-    assert call["Content"]["Simple"]["Subject"]["Data"].startswith("[Blend360]")
+    assert call["Content"]["Simple"]["Subject"]["Data"].startswith("[Relay]")
     text = call["Content"]["Simple"]["Body"]["Text"]["Data"]
     html = call["Content"]["Simple"]["Body"]["Html"]["Data"]
     assert "Reply directly with your answer" in text

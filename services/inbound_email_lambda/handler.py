@@ -2,15 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
-from aws_lambda_typing.context import Context
-from aws_lambda_typing.events import SESEvent
-from aws_lambda_typing.events.ses import (
-    SESEventRecord,
-    SESReceiptStatus,
-)
 
 from knowledge_core.answer_attachments import AnswerAttachmentPromoter
 from knowledge_core.dynamo import KnowledgeRepository
@@ -23,6 +17,14 @@ from knowledge_core.ids import safe_filename
 from knowledge_core.models import NotificationKind
 from knowledge_core.notifications import NotificationPublisher
 from knowledge_core.settings import InboundEmailSettings
+
+if TYPE_CHECKING:
+    from aws_lambda_typing.context import Context
+    from aws_lambda_typing.events import SESEvent
+    from aws_lambda_typing.events.ses import (
+        SESEventRecord,
+        SESReceiptStatus,
+    )
 
 LOGGER = logging.getLogger()
 LOGGER.setLevel(logging.INFO)

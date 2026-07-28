@@ -4,6 +4,7 @@ from functools import cached_property
 
 import boto3
 
+from app.download_sessions import DownloadSessionStore
 from app.mcp_oauth_store import McpOAuthStore
 from knowledge_core.dossier_rendering import LocalDossierRenderer
 from knowledge_core.dynamo import KnowledgeRepository
@@ -34,6 +35,13 @@ class ServiceContainer:
     @cached_property
     def oauth_store(self) -> McpOAuthStore:
         return McpOAuthStore(
+            self.settings.table_name,
+            region_name=self.settings.aws_region,
+        )
+
+    @cached_property
+    def download_sessions(self) -> DownloadSessionStore:
+        return DownloadSessionStore(
             self.settings.table_name,
             region_name=self.settings.aws_region,
         )

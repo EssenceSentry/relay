@@ -155,6 +155,10 @@ def test_server_guides_agents_through_v1_workflows() -> None:
         "create_project_question",
         "participant_sales_brief_generation prompt",
         "render_project_dossier",
+        "author_display_name",
+        "author_email",
+        "list_project_collaborators",
+        "email_verified",
     ):
         assert text in server.instructions
     assert (
@@ -164,6 +168,17 @@ def test_server_guides_agents_through_v1_workflows() -> None:
     assert "can_edit=false" in server.instructions
     assert (
         "Do not list projects, enumerate project documents, and read everything"
+        in server.instructions
+    )
+    assert "do not stop after reporting the gap" in server.instructions
+    assert (
+        "you MUST call get_project and list_project_collaborators"
+        in server.instructions
+    )
+    assert "suggest the verified project author first" in server.instructions
+    assert "offer to draft a question" in server.instructions
+    assert (
+        "do not call create_project_question until the user confirms"
         in server.instructions
     )
 
