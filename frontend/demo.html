@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="See how Relay turns a missing project answer into trusted, reusable knowledge."
+    />
+    <meta property="og:title" content="Relay — Knowledge moves through people" />
+    <meta
+      property="og:description"
+      content="An interactive story about grounded answers, expert handoffs, and reusable project knowledge."
+    />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:image"
+      content="https://essencesentry.shop/demo-assets/og-relay-story.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <title>Relay — An answer becomes knowledge</title>
+    <link rel="icon" type="image/png" href="assets/icon-mark.png" />
+    <link rel="apple-touch-icon" href="assets/icon-mark.png" />
+    <script>
+      if (new URLSearchParams(window.location.search).get("embed") === "1") {
+        document.documentElement.classList.add("embedded-demo");
+      }
+    </script>
+    <link rel="stylesheet" href="demo.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#story-stage">Skip to the story</a>
+
+    <div class="page-atmosphere" aria-hidden="true">
+      <span class="atmosphere-orb atmosphere-orb-one"></span>
+      <span class="atmosphere-orb atmosphere-orb-two"></span>
+      <span class="atmosphere-grid"></span>
+    </div>
+
+    <header class="demo-topbar">
+      <a class="demo-brand" href="/" aria-label="Relay home">
+        <span class="demo-brand-mark">
+          <img src="assets/icon-mark.png" alt="" />
+        </span>
+        <span>
+          <strong>Relay</strong>
+          <small>Project knowledge, in motion</small>
+        </span>
+      </a>
+
+      <div class="topbar-story-label" aria-hidden="true">
+        <span></span>
+        Interactive product story
+      </div>
+
+      <div class="topbar-actions">
+        <a class="exit-link" href="/">Exit demo</a>
+      </div>
+    </header>
+
+    <main class="demo-main">
+      <section class="story-heading" aria-labelledby="story-title">
+        <div>
+          <p class="story-eyebrow">
+            <span>Relay story 01</span>
+            Agentic Knowledge Platform
+          </p>
+          <h1 id="story-title">An answer becomes <em>knowledge.</em></h1>
+        </div>
+        <p class="story-deck">
+          Follow one question from grounded research, through a human expert,
+          and back into the project record—ready for the next agent.
+        </p>
+      </section>
+
+      <section class="replay-frame" aria-label="Interactive Relay story replay">
+        <aside class="chapter-rail" aria-label="Story chapters">
+          <div class="chapter-rail-heading">
+            <span>Story map</span>
+            <strong id="chapter-progress-label">1 of 9</strong>
+          </div>
+          <div id="chapter-list" class="chapter-list"></div>
+          <div class="chapter-rail-footer">
+            <span class="live-dot"></span>
+            Based on a real Relay session
+          </div>
+        </aside>
+
+        <section id="story-stage" class="story-stage" tabindex="-1">
+          <header class="stage-header">
+            <div class="stage-context">
+              <p id="stage-kicker">Act I · Foundation</p>
+              <h2 id="stage-title">Create the project</h2>
+            </div>
+            <div class="perspective-switch" aria-label="Current perspective">
+              <img
+                id="perspective-avatar"
+                class="perspective-avatar"
+                src="demo-assets/avatar-expert.png"
+                alt=""
+              />
+              <span>
+                <small>Current perspective</small>
+                <strong id="perspective-name">Agustín · Project owner</strong>
+              </span>
+            </div>
+          </header>
+
+          <div class="stage-progress" aria-hidden="true">
+            <span id="stage-progress-fill"></span>
+          </div>
+
+          <div id="stage-body" class="stage-body" aria-live="polite"></div>
+
+          <footer class="replay-controls">
+            <button
+              id="previous-step"
+              class="control-button control-secondary"
+              type="button"
+              aria-label="Previous chapter"
+            >
+              <span aria-hidden="true">←</span>
+              Back
+            </button>
+            <button
+              id="play-story"
+              class="control-button control-primary"
+              type="button"
+              aria-label="Play story"
+            >
+              <span id="play-icon" aria-hidden="true">▶</span>
+              <span id="play-label">Play story</span>
+            </button>
+            <button
+              id="next-step"
+              class="control-button control-secondary"
+              type="button"
+              aria-label="Next chapter"
+            >
+              Next
+              <span aria-hidden="true">→</span>
+            </button>
+            <div class="speed-control">
+              <label for="story-speed">Speed</label>
+              <select id="story-speed">
+                <option value="8500">Relaxed</option>
+                <option value="6500" selected>Normal</option>
+                <option value="4500">Fast</option>
+              </select>
+            </div>
+          </footer>
+        </section>
+      </section>
+
+      <section class="story-footnote">
+        <span>One project</span>
+        <i></i>
+        <span>Two people</span>
+        <i></i>
+        <span>Two answer channels</span>
+        <i></i>
+        <strong>One reusable answer</strong>
+      </section>
+    </main>
+
+    <div
+      id="document-modal"
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="document-modal-title"
+      hidden
+    >
+      <section class="document-window">
+        <header class="window-chrome">
+          <div class="window-dots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="window-title">
+            <span class="document-mark" aria-hidden="true">W</span>
+            <span>
+              <strong id="document-modal-title">Project document</strong>
+              <small id="document-modal-meta">Original project evidence</small>
+            </span>
+          </div>
+          <button class="modal-close" type="button" data-close-modal aria-label="Close document">
+            ×
+          </button>
+        </header>
+        <iframe
+          id="document-frame"
+          title="Project document contents"
+          src="demo-assets/agentic-knowledge-platform.html"
+        ></iframe>
+        <img
+          id="document-image"
+          src="demo-assets/dossier-pdf-first-page.png"
+          alt="First-page preview of the generated dossier"
+          hidden
+        />
+      </section>
+    </div>
+
+    <div id="toast" class="demo-toast" role="status" aria-live="polite" hidden></div>
+
+    <script type="module" src="demo.js"></script>
+  </body>
+</html>
