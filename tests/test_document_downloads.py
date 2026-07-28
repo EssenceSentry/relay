@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from app.auth import Principal
 from app.document_downloads import (
     DocumentDownloadUnavailable,
-    presign_document_download,
+    resolve_document_download,
 )
+from app.download_sessions import StoredDownloadSession
 from app.routes import build_api_router
 from fastapi import FastAPI
 
@@ -37,6 +40,33 @@ class FakeS3:
             }
         )
         return f"https://download.example/{Params['Key']}"
+
+
+class FakeDownloadSessions:
+    def __init__(self) -> None:
+        self.sessions: dict[str, StoredDownloadSession] = {}
+
+    def issue(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        filename: str,
+        content_type: str,
+        expires_in_seconds: int,
+    ) -> str:
+        token = chr(ord("A") + len(self.sessions)) * 43
+        self.sessions[token] = StoredDownloadSession(
+            bucket=bucket,
+            key=key,
+            filename=filename,
+            content_type=content_type,
+            expires_at=int(time.time()) + expires_in_seconds,
+        )
+        return token
+
+    def get(self, token: str) -> StoredDownloadSession | None:
+        return self.sessions.get(token)
 
 
 class FakeRepository:
@@ -90,34 +120,24 @@ def document() -> dict[str, Any]:
     }
 
 
-def test_presigns_original_with_source_filename(
+def test_resolves_original_with_source_filename(
     document: dict[str, Any],
 ) -> None:
-    s3 = FakeS3()
-
-    result = presign_document_download(
-        s3=s3,
+    result = resolve_document_download(
         document=document,
         download_format="original",
     )
 
     assert result.filename == "Client résumé.pptx"
     assert result.download_format == "original"
-    assert result.expires_in_seconds == 900
-    assert s3.calls[0]["params"]["Key"] == document["s3_key"]
-    assert (
-        "filename*=UTF-8''Client%20r%C3%A9sum%C3%A9.pptx"
-        in (s3.calls[0]["params"]["ResponseContentDisposition"])
-    )
+    assert result.key == document["s3_key"]
+    assert result.bucket == document["s3_bucket"]
 
 
-def test_presigns_consolidated_markdown_with_readable_filename(
+def test_resolves_consolidated_markdown_with_readable_filename(
     document: dict[str, Any],
 ) -> None:
-    s3 = FakeS3()
-
-    result = presign_document_download(
-        s3=s3,
+    result = resolve_document_download(
         document=document,
         download_format="markdown",
     )
@@ -125,7 +145,7 @@ def test_presigns_consolidated_markdown_with_readable_filename(
     assert result.filename == "Client résumé.pptx.md"
     assert result.content_type == "text/markdown; charset=utf-8"
     assert result.download_format == "markdown"
-    assert s3.calls[0]["params"]["Key"] == document["enhanced_s3_key"]
+    assert result.key == document["enhanced_s3_key"]
 
 
 def test_markdown_download_requires_consolidated_output(
@@ -137,8 +157,7 @@ def test_markdown_download_requires_consolidated_output(
         DocumentDownloadUnavailable,
         match="Consolidated Markdown is not available",
     ):
-        presign_document_download(
-            s3=FakeS3(),
+        resolve_document_download(
             document=document,
             download_format="markdown",
         )
@@ -148,9 +167,15 @@ def test_api_download_route_supports_both_representations(
     document: dict[str, Any],
 ) -> None:
     s3 = FakeS3()
+    download_sessions = FakeDownloadSessions()
     container = SimpleNamespace(
         repository=FakeRepository(document),
         s3=s3,
+        download_sessions=download_sessions,
+        settings=SimpleNamespace(
+            application_base_url="https://knowledge.example.com",
+            document_bucket="documents",
+        ),
     )
     app = FastAPI()
     app.include_router(
@@ -170,9 +195,34 @@ def test_api_download_route_supports_both_representations(
     assert original.status_code == 200
     assert original.json()["download_format"] == "original"
     assert original.json()["filename"] == "Client résumé.pptx"
+    assert original.json()["url"] == (
+        "https://knowledge.example.com/api/downloads/" + "A" * 43
+    )
     assert markdown.status_code == 200
     assert markdown.json()["download_format"] == "markdown"
     assert markdown.json()["filename"] == "Client résumé.pptx.md"
+    assert markdown.json()["url"] == (
+        "https://knowledge.example.com/api/downloads/" + "B" * 43
+    )
+    assert s3.calls == []
+
+    original_url = str(original.json()["url"])
+    redirected = client.get(
+        urlsplit(original_url).path,
+        follow_redirects=False,
+    )
+
+    assert redirected.status_code == 307
+    assert redirected.headers["location"].startswith(
+        "https://download.example/uploads/prj_1/doc_1/"
+    )
+    assert redirected.headers["cache-control"] == "no-store"
+    assert redirected.headers["referrer-policy"] == "no-referrer"
+    assert len(s3.calls) == 1
+    assert (
+        "filename*=UTF-8''Client%20r%C3%A9sum%C3%A9.pptx"
+        in s3.calls[0]["params"]["ResponseContentDisposition"]
+    )
 
 
 def test_api_returns_conflict_when_markdown_is_not_ready(
@@ -182,6 +232,11 @@ def test_api_returns_conflict_when_markdown_is_not_ready(
     container = SimpleNamespace(
         repository=FakeRepository(document),
         s3=FakeS3(),
+        download_sessions=FakeDownloadSessions(),
+        settings=SimpleNamespace(
+            application_base_url="https://knowledge.example.com",
+            document_bucket="documents",
+        ),
     )
     app = FastAPI()
     app.include_router(
@@ -200,3 +255,34 @@ def test_api_returns_conflict_when_markdown_is_not_ready(
     assert response.json()["detail"] == (
         "Consolidated Markdown is not available for this document yet."
     )
+
+
+def test_public_download_route_rejects_unknown_token_without_presigning(
+    document: dict[str, Any],
+) -> None:
+    s3 = FakeS3()
+    container = SimpleNamespace(
+        repository=FakeRepository(document),
+        s3=s3,
+        download_sessions=FakeDownloadSessions(),
+        settings=SimpleNamespace(
+            application_base_url="https://knowledge.example.com",
+            document_bucket="documents",
+        ),
+    )
+    app = FastAPI()
+    app.include_router(
+        build_api_router(
+            container,  # pyright: ignore[reportArgumentType]
+            lambda: _PRINCIPAL,
+        )
+    )
+
+    response = make_test_client(app).get(
+        "/api/downloads/not-a-valid-token",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Download link not found or expired"
+    assert s3.calls == []

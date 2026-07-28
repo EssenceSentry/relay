@@ -95,6 +95,81 @@ def test_rename_project_updates_only_project_metadata() -> None:
     assert project["name"] == "Renamed project"
 
 
+class AuthorshipTransactionClient:
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] | None = None
+
+    def transact_write_items(
+        self,
+        *,
+        TransactItems: list[dict[str, Any]],
+    ) -> None:
+        self.items = TransactItems
+
+
+class AuthorshipTableMeta:
+    def __init__(self, client: AuthorshipTransactionClient) -> None:
+        self.client = client
+
+
+class AuthorshipTransferTable:
+    name = "KnowledgeTable"
+
+    def __init__(self) -> None:
+        self.client = AuthorshipTransactionClient()
+        self.meta = AuthorshipTableMeta(self.client)
+
+    def get_item(self, **kwargs: Any) -> dict[str, Any]:
+        key = kwargs["Key"]
+        if key["PK"] == "PROJECT#prj_1":
+            return {
+                "Item": {
+                    "project_id": "prj_1",
+                    "name": "Project one",
+                    "created_by": "old.author@blend360.com",
+                }
+            }
+        if key["PK"] == "USER#new.author@gmail.com":
+            return {
+                "Item": {
+                    "subject": "user-new",
+                    "email": "new.author@gmail.com",
+                    "email_verified": True,
+                }
+            }
+        return {}
+
+
+def test_project_authorship_transfer_is_atomic_and_audited() -> None:
+    table = AuthorshipTransferTable()
+    repository = KnowledgeRepository.__new__(KnowledgeRepository)
+    repository._table = table  # type: ignore[assignment]
+
+    project, changed = repository.transfer_project_authorship(
+        project_id="prj_1",
+        previous_author_email="old.author@blend360.com",
+        new_author_email="new.author@gmail.com",
+        transferred_by="admin@gmail.com",
+    )
+
+    assert changed
+    assert project["created_by"] == "new.author@gmail.com"
+    assert project["author_transferred_from"] == ("old.author@blend360.com")
+    assert table.client.items is not None
+    update = table.client.items[0]["Update"]
+    assert update["ConditionExpression"] == ("#created_by = :previous_author")
+    assert update["ExpressionAttributeNames"]["#created_by"] == "created_by"
+    assert update["Key"] == {"PK": {"S": "PROJECT#prj_1"}, "SK": {"S": "META"}}
+    assert update["ExpressionAttributeValues"][":new_author"] == {
+        "S": "new.author@gmail.com"
+    }
+    membership = table.client.items[1]["Put"]["Item"]
+    assert membership["role"] == {"S": "AUTHOR"}
+    assert membership["email"] == {"S": "new.author@gmail.com"}
+    deleted = table.client.items[2]["Delete"]["Key"]
+    assert deleted["SK"] == {"S": "MEMBER#old.author@blend360.com"}
+
+
 def test_list_projects_paginates_beyond_first_response() -> None:
     table = PaginatedProjectTable()
     repository = KnowledgeRepository.__new__(KnowledgeRepository)

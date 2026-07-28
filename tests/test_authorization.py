@@ -12,7 +12,7 @@ from app.application import (
 )
 from app.auth import Principal
 
-from knowledge_core.models import KnowledgeGapCreate
+from knowledge_core.models import AnswerSubmit, KnowledgeGapCreate
 
 
 class FakeRepository:
@@ -49,6 +49,46 @@ class FakeQuestions:
             "gap": gap,
             "created_by": created_by,
             "question_id": question_id,
+        }
+
+
+class AnswerRepository(FakeRepository):
+    def __init__(self) -> None:
+        super().__init__(member=False)
+        self.requires_human_review: bool | None = None
+
+    def get_question(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+    ) -> dict[str, Any] | None:
+        return {
+            "project_id": project_id,
+            "question_id": question_id,
+            "question": "What was the outcome?",
+        }
+
+    def submit_answer(
+        self,
+        *,
+        project_id: str,
+        question_id: str,
+        answer: str,
+        answered_by: str,
+        requires_human_review: bool,
+        source: str,
+        answer_id: str | None,
+        supporting_document_ids: list[str],
+    ) -> dict[str, Any]:
+        del source, answer_id, supporting_document_ids
+        self.requires_human_review = requires_human_review
+        return {
+            "project_id": project_id,
+            "question_id": question_id,
+            "answer": answer,
+            "answered_by": answered_by,
+            "requires_human_review": requires_human_review,
         }
 
 
@@ -141,3 +181,20 @@ def test_only_admin_can_read_archived_projects() -> None:
         )["status"]
         == "ARCHIVED"
     )
+
+
+def test_admin_answer_skips_human_approval() -> None:
+    repository = AnswerRepository()
+    application = KnowledgeApplication(
+        SimpleNamespace(repository=repository),  # pyright: ignore[reportArgumentType]
+    )
+
+    answer = application.submit_question_answer(
+        "prj_1",
+        "gap_1",
+        AnswerSubmit(answer="The rollout increased conversion."),
+        principal=_principal(admin=True),
+    )
+
+    assert repository.requires_human_review is False
+    assert answer["requires_human_review"] is False

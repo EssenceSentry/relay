@@ -5,7 +5,12 @@ from typing import Any
 
 import app.auth as auth_module
 import pytest
-from app.auth import CognitoVerifier, make_principal_dependency
+from app.auth import (
+    CognitoVerifier,
+    Principal,
+    make_principal_dependency,
+    with_configured_admin,
+)
 from fastapi import HTTPException
 from jwt import PyJWKClient
 
@@ -33,6 +38,7 @@ def _container(*, auth_enabled: bool) -> Any:
             allowed_login_email_domains=frozenset(
                 {"blend360.com", "gmail.com"}
             ),
+            initial_admin_emails=frozenset({"essence.sentry@gmail.com"}),
         )
     )
 
@@ -139,3 +145,21 @@ def test_cognito_verifier_returns_groups_and_normalized_email(
 
     assert principal.email == "person@blend360.com"
     assert principal.is_admin
+
+
+def test_configured_admin_email_repairs_a_stale_group_claim() -> None:
+    principal = Principal(
+        subject="user-2",
+        email="essence.sentry@gmail.com",
+        groups=frozenset(),
+        claims={"token_source": "stale-oauth-record"},
+    )
+
+    effective = with_configured_admin(
+        principal,
+        frozenset({"essence.sentry@gmail.com"}),
+    )
+
+    assert effective.is_admin
+    assert effective.groups == frozenset({"admins"})
+    assert effective.claims == principal.claims

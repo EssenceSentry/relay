@@ -19,7 +19,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse
 
 from app.application import ApplicationError, KnowledgeApplication
-from app.auth import Principal
+from app.auth import Principal, with_configured_admin
 from app.mcp_models import (
     McpAnswer,
     McpCollaborationInvitation,
@@ -265,9 +265,18 @@ def _server_instructions(container: ServiceContainer) -> str:
                 "an inference as verified fact."
             ),
             (
-                "10. If project evidence is insufficient, explain the gap and "
-                "only then consider create_project_question. Reuse request_id "
-                "when retrying any write."
+                "10. When project-specific evidence remains insufficient after "
+                "retrieval, do not stop after reporting the gap. Before "
+                "responding, you MUST call get_project and "
+                "list_project_collaborators for the relevant project. State "
+                "what is missing, suggest the verified project author first "
+                "using author_display_name and author_email, suggest other "
+                "project members only when email_verified is true, and offer "
+                "to draft a question for the user's approval. If no unique "
+                "project is known, ask the user to identify it. These people "
+                "are suggestions only: do not call create_project_question "
+                "until the user confirms the exact recipient and question. "
+                "Reuse request_id when retrying any write."
             ),
             (
                 "11. For a finished project dossier, follow the dossier skill "
@@ -329,11 +338,14 @@ def build_mcp_server(
             )
         except ValidationError:
             groups = frozenset()
-        return Principal(
-            subject=str(access_token.subject or ""),
-            email=str(claims.get("email") or "").strip().casefold(),
-            groups=groups,
-            claims=dict(claims),
+        return with_configured_admin(
+            Principal(
+                subject=str(access_token.subject or ""),
+                email=str(claims.get("email") or "").strip().casefold(),
+                groups=groups,
+                claims=dict(claims),
+            ),
+            container.settings.initial_admin_emails,
         )
 
     def call[T](operation: Callable[[], T]) -> T:

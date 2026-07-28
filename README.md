@@ -112,7 +112,8 @@ matches it.
 
 The dossier skill researches a project, opens the material sources, and writes
 the final cited Markdown locally. `render_project_dossier` then validates that
-editorial contract and returns private, 15-minute download links for:
+editorial contract and returns private, URL-safe, 15-minute Relay download
+links for:
 
 - an editable DOCX dossier;
 - a polished PDF dossier.
@@ -149,6 +150,9 @@ rebuildable BM25 text and `text-embedding-3-large` vectors.
 
 Questions may target an exact verified registered user. Agents resolve a named
 answerer through `search_user_directory` and never infer an email address.
+When evidence is insufficient and no other expert was named, project responses
+expose the verified author as the first person for the agent to suggest; agents
+then use the project collaborator list to suggest other verified members.
 Project members and the requested person receive durable inbox notifications;
 email is asynchronous and best effort.
 
@@ -215,7 +219,7 @@ or answer submission.
 ## Agent plugin
 
 `frontend/downloads/relay-bundle.zip` is a deterministic
-Codex/Claude bundle at version `1.0.1`. It contains the authenticated remote MCP
+Codex/Claude bundle at version `1.0.3`. It contains the authenticated remote MCP
 configuration and two skills:
 
 - `manage-project-knowledge`: safe project, collaborator, retrieval, upload,

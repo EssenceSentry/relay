@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from app.application import Conflict, KnowledgeApplication
 from app.auth import Principal
+from app.download_sessions import StoredDownloadSession
 from botocore.exceptions import ClientError
 
 from knowledge_core.dossier_rendering import RenderedDossierBytes
@@ -79,6 +80,30 @@ class FakeS3:
         return f"https://downloads.example/{Params['Key']}?ttl={ExpiresIn}"
 
 
+class FakeDownloadSessions:
+    def __init__(self) -> None:
+        self.sessions: dict[str, StoredDownloadSession] = {}
+
+    def issue(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        filename: str,
+        content_type: str,
+        expires_in_seconds: int,
+    ) -> str:
+        token = chr(ord("A") + len(self.sessions)) * 43
+        self.sessions[token] = StoredDownloadSession(
+            bucket=bucket,
+            key=key,
+            filename=filename,
+            content_type=content_type,
+            expires_at=expires_in_seconds,
+        )
+        return token
+
+
 def _application() -> tuple[KnowledgeApplication, FakeRenderer, FakeS3]:
     renderer = FakeRenderer()
     s3 = FakeS3()
@@ -86,7 +111,11 @@ def _application() -> tuple[KnowledgeApplication, FakeRenderer, FakeS3]:
         repository=FakeRepository(),
         dossier_renderer=renderer,
         s3=s3,
-        settings=SimpleNamespace(document_bucket="documents"),
+        download_sessions=FakeDownloadSessions(),
+        settings=SimpleNamespace(
+            document_bucket="documents",
+            application_base_url="https://knowledge.example.com",
+        ),
     )
     return (
         KnowledgeApplication(container),  # pyright: ignore[reportArgumentType]
@@ -125,8 +154,12 @@ def test_render_is_private_persisted_and_idempotent() -> None:
     assert len(s3.objects) == 4
     assert first.render_id == repeated.render_id
     assert repeated.reused_existing_render is True
-    assert first.docx_url.startswith("https://downloads.example/")
-    assert first.pdf_url.startswith("https://downloads.example/")
+    assert first.docx_url.startswith(
+        "https://knowledge.example.com/api/downloads/"
+    )
+    assert first.pdf_url.startswith(
+        "https://knowledge.example.com/api/downloads/"
+    )
 
 
 def test_render_request_id_cannot_be_reused_for_other_markdown() -> None:

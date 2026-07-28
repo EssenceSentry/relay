@@ -8,6 +8,7 @@ from functools import partial
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.application import (
@@ -129,6 +130,18 @@ def build_api_router(
     router = APIRouter(prefix="/api")
     application = KnowledgeApplication(container)
     principal_default = cast(Principal, Depends(principal_dependency))
+
+    @router.get("/downloads/{token}", include_in_schema=False)
+    def redeem_download(token: str) -> RedirectResponse:
+        url = _api_call(lambda: application.redeem_download(token))
+        return RedirectResponse(
+            url,
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            headers={
+                "Cache-Control": "no-store",
+                "Referrer-Policy": "no-referrer",
+            },
+        )
 
     @router.get("/me")
     def get_current_user(

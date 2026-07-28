@@ -15,7 +15,9 @@ def test_authenticated_api_and_mcp_have_explicit_operation_parity() -> None:
         lambda: None,
     )
     api_operations = {
-        route.name for route in router.routes if isinstance(route, APIRoute)
+        route.name
+        for route in router.routes
+        if isinstance(route, APIRoute) and route.include_in_schema
     }
     mcp_operations = {
         tool.name

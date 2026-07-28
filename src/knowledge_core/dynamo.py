@@ -190,6 +190,145 @@ class KnowledgeRepository:
         item = response.get("Item")
         return _plain(item) if item else None
 
+    def transfer_project_authorship(
+        self,
+        *,
+        project_id: str,
+        previous_author_email: str,
+        new_author_email: str,
+        transferred_by: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically replace a project's author and author membership."""
+        previous_author = normalize_email(previous_author_email)
+        new_author = normalize_email(new_author_email)
+        actor = normalize_email(transferred_by)
+        project = self.require_project(project_id)
+        current_author = normalize_email(str(project.get("created_by") or ""))
+        if current_author == new_author:
+            return project, False
+        if current_author != previous_author:
+            raise ValueError(
+                f"Project {project_id!r} is authored by {current_author!r}, "
+                f"not {previous_author!r}"
+            )
+
+        profile = self.get_user_profile(new_author)
+        if profile is None or not profile.get("email_verified"):
+            raise ValueError(
+                f"New author {new_author!r} must be a verified Relay user"
+            )
+        now = utc_now_iso()
+        membership = {
+            "PK": _project_pk(project_id),
+            "SK": _membership_sk(new_author),
+            "GSI1PK": f"USER#{new_author}",
+            "GSI1SK": f"MEMBERSHIP#{project_id}",
+            "entity_type": "PROJECT_MEMBERSHIP",
+            "project_id": project_id,
+            "email": new_author,
+            "user_subject": profile.get("subject"),
+            "role": MembershipRole.AUTHOR.value,
+            "source": MembershipSource.PROJECT_AUTHOR.value,
+            "evidence": {
+                "previous_author_email": previous_author,
+                "transferred_by": actor,
+            },
+            "created_by": actor,
+            "created_at": now,
+            "updated_at": now,
+        }
+        clean_membership = {
+            key: value for key, value in membership.items() if value is not None
+        }
+        transaction: list[dict[str, Any]] = [
+            {
+                "Update": {
+                    "TableName": self._table.name,
+                    "Key": _serialized_item(
+                        {"PK": _project_pk(project_id), "SK": "META"}
+                    ),
+                    "UpdateExpression": (
+                        "SET #created_by = :new_author, "
+                        "#updated_at = :updated_at, #updated_by = :actor, "
+                        "#transferred_from = :previous_author, "
+                        "#transferred_at = :transferred_at, "
+                        "#transferred_by = :actor"
+                    ),
+                    "ConditionExpression": ("#created_by = :previous_author"),
+                    "ExpressionAttributeNames": {
+                        "#created_by": "created_by",
+                        "#updated_at": "updated_at",
+                        "#updated_by": "updated_by",
+                        "#transferred_from": "author_transferred_from",
+                        "#transferred_at": "author_transferred_at",
+                        "#transferred_by": "author_transferred_by",
+                    },
+                    "ExpressionAttributeValues": _serialized_item(
+                        {
+                            ":new_author": new_author,
+                            ":previous_author": previous_author,
+                            ":updated_at": now,
+                            ":transferred_at": now,
+                            ":actor": actor,
+                        }
+                    ),
+                }
+            },
+            {
+                "Put": {
+                    "TableName": self._table.name,
+                    "Item": _serialized_item(clean_membership),
+                }
+            },
+            {
+                "Delete": {
+                    "TableName": self._table.name,
+                    "Key": _serialized_item(
+                        {
+                            "PK": _project_pk(project_id),
+                            "SK": _membership_sk(previous_author),
+                        }
+                    ),
+                }
+            },
+        ]
+        try:
+            self._table.meta.client.transact_write_items(
+                TransactItems=cast(Any, transaction)
+            )
+        except ClientError as exc:
+            if (
+                exc.response.get("Error", {}).get("Code")
+                != "TransactionCanceledException"
+            ):
+                raise
+            current = self.require_project(project_id)
+            if (
+                str(current.get("created_by") or "").strip().casefold()
+                == new_author
+            ):
+                return current, False
+            cancellation_reasons = exc.response.get("CancellationReasons")
+            reason_detail = (
+                f": {cancellation_reasons!r}" if cancellation_reasons else ""
+            )
+            raise ValueError(
+                f"Project {project_id!r} authorship transfer "
+                f"failed{reason_detail}"
+            ) from exc
+        return (
+            {
+                **project,
+                "created_by": new_author,
+                "updated_at": now,
+                "updated_by": actor,
+                "author_transferred_from": previous_author,
+                "author_transferred_at": now,
+                "author_transferred_by": actor,
+            },
+            True,
+        )
+
     def require_project(self, project_id: str) -> dict[str, Any]:
         project = self.get_project(project_id)
         if project is None:

@@ -34,6 +34,7 @@ class FakeRepository:
             "project_id": project_id,
             "name": name,
             "updated_by": updated_by,
+            "created_by": "owner@blend360.com",
         }
 
     def get_project(self, project_id: str) -> dict[str, str] | None:
@@ -43,7 +44,51 @@ class FakeRepository:
             "project_id": project_id,
             "name": "Project one",
             "status": "ACTIVE",
+            "created_by": "owner@blend360.com",
         }
+
+    def get_user_profile(self, email: str) -> dict[str, Any] | None:
+        if email == "owner@blend360.com":
+            return {
+                "email": email,
+                "display_name": "Project Owner",
+                "email_verified": True,
+            }
+        if email == "collaborator@blend360.com":
+            return {
+                "email": email,
+                "display_name": "Project Collaborator",
+                "email_verified": True,
+            }
+        if email == "unverified@blend360.com":
+            return {
+                "email": email,
+                "display_name": "Unverified Person",
+            }
+        return None
+
+    def list_project_members(self, project_id: str) -> list[dict[str, str]]:
+        assert project_id == "prj_1"
+        return [
+            {
+                "project_id": project_id,
+                "email": "owner@blend360.com",
+                "role": "AUTHOR",
+                "source": "PROJECT_AUTHOR",
+            },
+            {
+                "project_id": project_id,
+                "email": "collaborator@blend360.com",
+                "role": "COLLABORATOR",
+                "source": "MANUAL_INVITATION",
+            },
+            {
+                "project_id": project_id,
+                "email": "unverified@blend360.com",
+                "role": "COLLABORATOR",
+                "source": "DOCUMENT_EXACT_EMAIL",
+            },
+        ]
 
     def is_project_member(self, *, project_id: str, email: str) -> bool:
         return project_id == "prj_1" and email == "owner@blend360.com"
@@ -100,6 +145,9 @@ def test_rename_project_endpoint_returns_updated_project() -> None:
         "project_id": "prj_1",
         "name": "New project name",
         "updated_by": "owner@blend360.com",
+        "created_by": "owner@blend360.com",
+        "author_display_name": "Project Owner",
+        "author_email": "owner@blend360.com",
         "my_role": "AUTHOR",
         "can_edit": True,
         "can_ask_questions": True,
@@ -115,6 +163,40 @@ def test_rename_project_endpoint_returns_updated_project() -> None:
             "name": "New project name",
             "updated_by": "owner@blend360.com",
         }
+    ]
+
+
+def test_collaborator_endpoint_identifies_verified_suggested_experts() -> None:
+    response = _client(FakeRepository()).get(
+        "/api/projects/prj_1/collaborators"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "project_id": "prj_1",
+            "email": "owner@blend360.com",
+            "role": "AUTHOR",
+            "source": "PROJECT_AUTHOR",
+            "display_name": "Project Owner",
+            "email_verified": True,
+        },
+        {
+            "project_id": "prj_1",
+            "email": "collaborator@blend360.com",
+            "role": "COLLABORATOR",
+            "source": "MANUAL_INVITATION",
+            "display_name": "Project Collaborator",
+            "email_verified": True,
+        },
+        {
+            "project_id": "prj_1",
+            "email": "unverified@blend360.com",
+            "role": "COLLABORATOR",
+            "source": "DOCUMENT_EXACT_EMAIL",
+            "display_name": "Unverified Person",
+            "email_verified": False,
+        },
     ]
 
 
