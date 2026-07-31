@@ -1504,6 +1504,7 @@ function handler(event) {
             distribution=distribution,
             distribution_paths=["/*"],
             cache_control=[s3deploy.CacheControl.no_cache()],
+            memory_limit=512,
             prune=True,
         )
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the static cross-client Relay plugin bundle."""
+"""Build deterministic Relay plugin and skill download archives."""
 
 from __future__ import annotations
 
@@ -17,6 +17,15 @@ PLUGIN_SOURCE = ROOT / "plugins" / PLUGIN_NAME
 DOWNLOADS_DIR = ROOT / "frontend" / "downloads"
 ARCHIVE_PATH = DOWNLOADS_DIR / f"{PLUGIN_NAME}-bundle.zip"
 CHECKSUM_PATH = DOWNLOADS_DIR / f"{PLUGIN_NAME}-bundle.sha256"
+DOWNLOAD_MANIFEST_PATH = DOWNLOADS_DIR / "relay-downloads.json"
+SKILL_DESCRIPTIONS = {
+    "manage-project-knowledge": (
+        "Safe Relay project, retrieval, upload, inbox, and question workflows."
+    ),
+    "create-project-dossier": (
+        "Evidence-first Relay dossiers and sales briefs with inline citations."
+    ),
+}
 
 
 def _read_plugin_manifest() -> dict[str, object]:
@@ -71,9 +80,10 @@ def _install_readme(version: str) -> str:
 
 Version: {version}
 
-This Relay bundle contains the authenticated remote MCP connection, the general
-project-operations skill, and the source-cited dossier skill for Codex and
-Claude Code. It connects to:
+Relay normally provides its current workflows directly through the remote MCP.
+This compatibility bundle contains that authenticated MCP connection plus the
+project-operations and source-cited dossier skills for Codex and Claude Code.
+It connects to:
 
 https://essencesentry.shop/mcp/
 
@@ -142,6 +152,28 @@ def _archive_tree(source: Path, destination: Path) -> None:
             archive.writestr(info, path.read_bytes(), compresslevel=9)
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_checksum(path: Path, *, digest: str, filename: str) -> None:
+    path.write_text(f"{digest}  {filename}\n", encoding="utf-8")
+
+
+def _artifact(
+    *,
+    name: str,
+    description: str,
+    path: Path,
+) -> dict[str, str]:
+    return {
+        "name": name,
+        "description": description,
+        "filename": path.name,
+        "sha256": _sha256(path),
+    }
+
+
 def main() -> None:
     manifest = _read_plugin_manifest()
     version = str(manifest["version"])
@@ -165,13 +197,50 @@ def main() -> None:
         )
         _archive_tree(bundle_root, ARCHIVE_PATH)
 
-    digest = hashlib.sha256(ARCHIVE_PATH.read_bytes()).hexdigest()
-    CHECKSUM_PATH.write_text(
-        f"{digest}  {ARCHIVE_PATH.name}\n",
-        encoding="utf-8",
+    plugin_artifact = _artifact(
+        name="relay",
+        description=(
+            "Complete Relay compatibility bundle with MCP configuration and "
+            "both skills."
+        ),
+        path=ARCHIVE_PATH,
+    )
+    _write_checksum(
+        CHECKSUM_PATH,
+        digest=plugin_artifact["sha256"],
+        filename=ARCHIVE_PATH.name,
+    )
+
+    skill_artifacts: list[dict[str, str]] = []
+    for skill_name, description in SKILL_DESCRIPTIONS.items():
+        skill_path = PLUGIN_SOURCE / "skills" / skill_name
+        archive_path = DOWNLOADS_DIR / f"{skill_name}.zip"
+        checksum_path = DOWNLOADS_DIR / f"{skill_name}.sha256"
+        _archive_tree(skill_path, archive_path)
+        artifact = _artifact(
+            name=skill_name,
+            description=description,
+            path=archive_path,
+        )
+        _write_checksum(
+            checksum_path,
+            digest=artifact["sha256"],
+            filename=archive_path.name,
+        )
+        skill_artifacts.append(artifact)
+
+    _write_json(
+        DOWNLOAD_MANIFEST_PATH,
+        {
+            "version": version,
+            "plugin_bundle": plugin_artifact,
+            "skills": skill_artifacts,
+        },
     )
     print(f"Built {ARCHIVE_PATH.relative_to(ROOT)}")
-    print(f"SHA-256 {digest}")
+    for artifact in skill_artifacts:
+        print(f"Built frontend/downloads/{artifact['filename']}")
+    print(f"SHA-256 {plugin_artifact['sha256']}")
 
 
 if __name__ == "__main__":

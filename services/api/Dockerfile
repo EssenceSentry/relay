@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY src /app/src
 COPY services/api /app/services/api
 COPY participant_sales_brief_generation_prompt.md /app/participant_sales_brief_generation_prompt.md
+COPY plugins/relay/skills /app/plugins/relay/skills
+COPY frontend/downloads/relay-downloads.json /app/frontend/downloads/relay-downloads.json
 
 EXPOSE 8000
 

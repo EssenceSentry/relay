@@ -6,7 +6,11 @@ from app.mcp_server import build_mcp_server
 from app.routes import build_api_router
 from fastapi.routing import APIRoute
 
-from tests.test_mcp_server import EXPECTED_V1_TOOLS
+from tests.test_mcp_server import (
+    EXPECTED_API_MCP_OPERATIONS,
+    EXPECTED_V1_TOOLS,
+    MCP_ONLY_TOOLS,
+)
 
 
 def test_authenticated_api_and_mcp_have_explicit_operation_parity() -> None:
@@ -28,5 +32,6 @@ def test_authenticated_api_and_mcp_have_explicit_operation_parity() -> None:
         )
     }
 
-    assert api_operations == EXPECTED_V1_TOOLS
+    assert api_operations == EXPECTED_API_MCP_OPERATIONS
     assert mcp_operations == EXPECTED_V1_TOOLS
+    assert mcp_operations - api_operations == MCP_ONLY_TOOLS
