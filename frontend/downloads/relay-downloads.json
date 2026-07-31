@@ -1,0 +1,23 @@
+{
+  "version": "1.0.4",
+  "plugin_bundle": {
+    "name": "relay",
+    "description": "Complete Relay compatibility bundle with MCP configuration and both skills.",
+    "filename": "relay-bundle.zip",
+    "sha256": "7376dfd2ff84cdb5356e3ec348083866026228d2188902d2ae8be00d1ee0e959"
+  },
+  "skills": [
+    {
+      "name": "manage-project-knowledge",
+      "description": "Safe Relay project, retrieval, upload, inbox, and question workflows.",
+      "filename": "manage-project-knowledge.zip",
+      "sha256": "43660d37385e18bd54cce5508e906ab3b49c4d325c129c9327baefdfb1041d50"
+    },
+    {
+      "name": "create-project-dossier",
+      "description": "Evidence-first Relay dossiers and sales briefs with inline citations.",
+      "filename": "create-project-dossier.zip",
+      "sha256": "e41ab5d13fef33e0e347a194da3b7157bb0ffabcfbe71cc78de39883dc9cb648"
+    }
+  ]
+}

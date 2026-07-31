@@ -485,31 +485,6 @@ h3 {
   margin-bottom: 0;
 }
 
-.info-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 0 3px;
-  border: 0;
-  cursor: pointer;
-  color: var(--ink-soft);
-  background: transparent;
-  font-size: 0.72rem;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.info-link span {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-  font-family: Georgia, serif;
-  font-size: 0.72rem;
-}
-
 .connection-url {
   display: flex;
   gap: 8px;
@@ -520,13 +495,9 @@ h3 {
   background: rgba(255, 255, 255, 0.72);
 }
 
-.plugin-download {
-  min-height: 46px;
-  margin-top: 8px;
-}
-
-.connection-or {
-  margin: 18px 0 0;
+.connection-label {
+  display: block;
+  margin: 20px 0 0;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 700;
@@ -861,65 +832,6 @@ select {
   background: rgba(255, 255, 255, 0.36);
 }
 
-.modal-open {
-  overflow: hidden;
-}
-
-.modal-backdrop {
-  position: fixed;
-  z-index: 20;
-  inset: 0;
-  display: grid;
-  overflow-y: auto;
-  place-items: center;
-  padding: 28px;
-  background: rgba(12, 22, 26, 0.68);
-  backdrop-filter: blur(12px);
-}
-
-.connection-explainer {
-  position: relative;
-  width: min(620px, 100%);
-  padding: clamp(28px, 5vw, 46px);
-  border-radius: 28px;
-}
-
-.modal-close {
-  position: absolute;
-  top: 15px;
-  right: 15px;
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.72);
-  font-size: 1.2rem;
-}
-
-.explainer-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 24px;
-}
-
-.explainer-options article {
-  padding: 19px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.52);
-}
-
-.explainer-options p {
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 0.84rem;
-  line-height: 1.55;
-}
-
 .toast {
   position: fixed;
   z-index: 30;
@@ -1024,10 +936,6 @@ select {
     flex-direction: column;
   }
 
-  .plugin-download {
-    width: 100%;
-  }
-
   .demo-showcase {
     margin-top: 38px;
   }
@@ -1063,15 +971,6 @@ select {
 
   .notice {
     display: grid;
-  }
-
-  .modal-backdrop {
-    align-items: start;
-    padding: 14px;
-  }
-
-  .explainer-options {
-    grid-template-columns: 1fr;
   }
 
 }

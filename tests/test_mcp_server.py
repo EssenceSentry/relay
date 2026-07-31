@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from app.mcp_server import build_mcp_server
 from mcp.types import TextContent
 
-EXPECTED_V1_TOOLS = {
+EXPECTED_API_MCP_OPERATIONS = {
     "get_current_user",
     "search_user_directory",
     "list_my_notifications",
@@ -43,6 +43,14 @@ EXPECTED_V1_TOOLS = {
     "resend_question_email",
 }
 
+MCP_ONLY_TOOLS = {
+    "get_project_knowledge_workflow",
+    "get_project_dossier_template",
+    "get_relay_skill_downloads",
+}
+
+EXPECTED_V1_TOOLS = EXPECTED_API_MCP_OPERATIONS | MCP_ONLY_TOOLS
+
 OLD_TOOL_NAMES = {
     "search_knowledge",
     "create_knowledge_gap",
@@ -72,6 +80,12 @@ def _prompt_map(server: Any) -> dict[str, Any]:
     return {
         prompt.name: prompt for prompt in asyncio.run(server.list_prompts())
     }
+
+
+def _call_tool_data(server: Any, name: str) -> dict[str, Any]:
+    _, structured = asyncio.run(server.call_tool(name, {}))
+    assert isinstance(structured, dict)
+    return cast(dict[str, Any], structured)
 
 
 def test_v1_tool_catalog_is_complete_and_old_names_are_absent() -> None:
@@ -122,6 +136,21 @@ def test_tool_catalog_exposes_bounded_inputs_and_safety_annotations() -> None:
     }:
         assert tools[name].annotations.openWorldHint is True
 
+    for name in MCP_ONLY_TOOLS:
+        assert tools[name].annotations.readOnlyHint is True
+        assert tools[name].annotations.destructiveHint is False
+        assert tools[name].annotations.openWorldHint is False
+
+    assert "Call before substantial Relay project operations" in (
+        tools["get_project_knowledge_workflow"].description
+    )
+    assert "Call before researching or drafting" in (
+        tools["get_project_dossier_template"].description
+    )
+    assert "Ordinary Relay work should use the workflow tools" in (
+        tools["get_relay_skill_downloads"].description
+    )
+
     render = tools["render_project_dossier"]
     assert render.annotations.openWorldHint is False
     assert render.annotations.destructiveHint is False
@@ -159,6 +188,9 @@ def test_server_guides_agents_through_v1_workflows() -> None:
         "author_email",
         "list_project_collaborators",
         "email_verified",
+        "get_project_knowledge_workflow",
+        "get_project_dossier_template",
+        "get_relay_skill_downloads",
     ):
         assert text in server.instructions
     assert (
@@ -181,6 +213,62 @@ def test_server_guides_agents_through_v1_workflows() -> None:
         "do not call create_project_question until the user confirms"
         in server.instructions
     )
+    assert "Dynamic MCP workflow guidance is the default" in server.instructions
+    assert "Do not advertise downloads during ordinary Relay work" in (
+        server.instructions
+    )
+
+
+def test_workflow_tools_return_current_skill_content_with_hashes() -> None:
+    server = build_mcp_server(object())  # type: ignore[arg-type]
+
+    project_workflow = _call_tool_data(
+        server,
+        "get_project_knowledge_workflow",
+    )
+    assert project_workflow["workflow"] == "manage-project-knowledge"
+    assert "## Safety contract" in project_workflow["workflow_instructions"]
+    assert project_workflow["bundled_reference"] is None
+    assert len(project_workflow["content_sha256"]) == 64
+
+    dossier_workflow = _call_tool_data(
+        server,
+        "get_project_dossier_template",
+    )
+    assert dossier_workflow["workflow"] == "create-project-dossier"
+    assert "## Research workflow" in dossier_workflow["workflow_instructions"]
+    assert (
+        "## Required Markdown skeleton" in dossier_workflow["bundled_reference"]
+    )
+    assert len(dossier_workflow["content_sha256"]) == 64
+
+
+def test_skill_download_tool_returns_deployed_urls_and_checksums() -> None:
+    container = SimpleNamespace(
+        settings=SimpleNamespace(
+            application_base_url="https://relay.example",
+            mcp_public_base_url=None,
+        )
+    )
+    downloads = _call_tool_data(
+        build_mcp_server(container),  # type: ignore[arg-type]
+        "get_relay_skill_downloads",
+    )
+
+    assert downloads["version"] == "1.0.4"
+    assert downloads["plugin_bundle"]["url"] == (
+        "https://relay.example/downloads/relay-bundle.zip"
+    )
+    assert {item["name"] for item in downloads["skills"]} == {
+        "manage-project-knowledge",
+        "create-project-dossier",
+    }
+    assert all(
+        item["url"].startswith("https://relay.example/downloads/")
+        and len(item["sha256"]) == 64
+        for item in downloads["skills"]
+    )
+    assert "MCP workflow tools by default" in downloads["default_usage"]
 
 
 def test_sales_brief_prompt_requires_grounded_inline_citations() -> None:

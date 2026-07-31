@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import asdict
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -31,11 +32,16 @@ from app.mcp_models import (
     McpDocumentText,
     McpDocumentUpload,
     McpDossierRender,
+    McpDownloadArtifactManifest,
     McpNotification,
     McpProject,
     McpQuestion,
     McpSearchResponse,
+    McpSkillDownload,
+    McpSkillDownloadManifest,
+    McpSkillDownloads,
     McpVerifiedFact,
+    McpWorkflowGuide,
 )
 from app.mcp_oauth import MCP_SCOPE, CognitoMcpOAuthProvider
 from app.services import ServiceContainer
@@ -185,9 +191,23 @@ _DESTRUCTIVE_EXTERNAL_WRITE = ToolAnnotations(
 )
 _OAUTH_META = {"securitySchemes": [{"type": "oauth2", "scopes": [MCP_SCOPE]}]}
 _TEST_META = {"securitySchemes": [{"type": "noauth"}]}
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _SALES_BRIEF_PROMPT_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "participant_sales_brief_generation_prompt.md"
+    _REPOSITORY_ROOT / "participant_sales_brief_generation_prompt.md"
+)
+_RELAY_SKILLS_ROOT = _REPOSITORY_ROOT / "plugins" / "relay" / "skills"
+_PROJECT_KNOWLEDGE_SKILL_PATH = (
+    _RELAY_SKILLS_ROOT / "manage-project-knowledge" / "SKILL.md"
+)
+_DOSSIER_SKILL_PATH = _RELAY_SKILLS_ROOT / "create-project-dossier" / "SKILL.md"
+_DOSSIER_FORMAT_PATH = (
+    _RELAY_SKILLS_ROOT
+    / "create-project-dossier"
+    / "references"
+    / "dossier-format.md"
+)
+_DOWNLOAD_MANIFEST_PATH = (
+    _REPOSITORY_ROOT / "frontend" / "downloads" / "relay-downloads.json"
 )
 _STRING_LIST_ADAPTER = TypeAdapter(list[str])
 
@@ -195,6 +215,65 @@ _STRING_LIST_ADAPTER = TypeAdapter(list[str])
 @lru_cache(maxsize=1)
 def _sales_brief_prompt_template() -> str:
     return _SALES_BRIEF_PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+@cache
+def _markdown_body(path: Path) -> str:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text.startswith("---\n"):
+        return text
+    _, separator, body = text[4:].partition("\n---\n")
+    if not separator:
+        raise ValueError(f"Invalid skill frontmatter in {path.name}")
+    return body.strip()
+
+
+def _workflow_guide(
+    *,
+    workflow: Literal[
+        "manage-project-knowledge",
+        "create-project-dossier",
+    ],
+    purpose: str,
+    skill_path: Path,
+    bundled_reference_path: Path | None,
+    next_action: str,
+) -> McpWorkflowGuide:
+    instructions = _markdown_body(skill_path)
+    bundled_reference = (
+        _markdown_body(bundled_reference_path)
+        if bundled_reference_path is not None
+        else None
+    )
+    hash_input = instructions
+    if bundled_reference is not None:
+        hash_input += f"\n\n{bundled_reference}"
+    return McpWorkflowGuide(
+        workflow=workflow,
+        purpose=purpose,
+        workflow_instructions=instructions,
+        bundled_reference=bundled_reference,
+        content_sha256=hashlib.sha256(hash_input.encode("utf-8")).hexdigest(),
+        next_action=next_action,
+    )
+
+
+@lru_cache(maxsize=1)
+def _skill_download_manifest() -> McpSkillDownloadManifest:
+    return McpSkillDownloadManifest.model_validate_json(
+        _DOWNLOAD_MANIFEST_PATH.read_text(encoding="utf-8")
+    )
+
+
+def _skill_download(
+    artifact: McpDownloadArtifactManifest,
+    *,
+    base_url: str,
+) -> McpSkillDownload:
+    return McpSkillDownload(
+        **artifact.model_dump(),
+        url=f"{base_url}downloads/{artifact.filename}",
+    )
 
 
 def _web_application_url(container: ServiceContainer) -> str | None:
@@ -213,59 +292,67 @@ def _server_instructions(container: ServiceContainer) -> str:
         [
             "Use Relay as the source of truth for project work.",
             (
-                "1. Call get_current_user when permissions matter. If an exact "
+                "1. Before a substantial project operation, call "
+                "get_project_knowledge_workflow and apply its current "
+                "instructions. Before researching or drafting a dossier, "
+                "sales brief, success story, capability story, or case study, "
+                "call get_project_dossier_template and treat its workflow and "
+                "bundled format as binding."
+            ),
+            (
+                "2. Call get_current_user when permissions matter. If an exact "
                 "project_id is unknown, locate it through search_all_projects; "
                 "never invent an ID."
             ),
             (
-                "2. For evidence questions, begin with several focused "
+                "3. For evidence questions, begin with several focused "
                 "search_all_projects queries. Open material hits with "
                 "get_document_text, then use search_project_knowledge only to "
                 "deepen or disambiguate a likely project."
             ),
             (
-                "3. Cite document name plus page, slide, or locator. Treat "
+                "4. Cite document name plus page, slide, or locator. Treat "
                 "retrieval scores as ranking signals, not proof."
             ),
             (
-                "4. Do not list projects, enumerate project documents, and "
+                "5. Do not list projects, enumerate project documents, and "
                 "read everything as a retrieval strategy. Use list_projects "
                 "and list_project_documents for explicit inventory, "
                 "administration, status checks, or only as a last resort "
                 "after search fails."
             ),
             (
-                "5. For uploads, call prepare_document_upload only when the "
+                "6. For uploads, call prepare_document_upload only when the "
                 "client can send a local file to the returned presigned S3 "
                 "POST. Otherwise direct the user to its fallback_url. Poll "
                 "get_document until READY or FAILED."
             ),
             (
-                "6. Use list_my_notifications, "
+                "7. Use list_my_notifications, "
                 "list_my_collaboration_invitations, and "
                 "list_my_assigned_questions for inbox work. Inspect a question "
                 "and its answers before responding or reviewing."
             ),
             (
-                "7. Every authenticated reader may create and answer project "
+                "8. Every authenticated reader may create and answer project "
                 "questions. can_edit=false limits project content changes; it "
                 "does not prevent create_project_question. Non-collaborator "
                 "answers require member review."
             ),
             (
-                "8. When a requested answerer is named but no exact email is "
+                "9. When a requested answerer is named but no exact email is "
                 "known, call search_user_directory. Use only a unique match; "
                 "ask the user to disambiguate multiple results and never "
                 "construct an address from a name."
             ),
             (
-                "9. Get explicit user confirmation before sending email, "
+                "10. Get explicit user confirmation before sending email, "
                 "inviting or removing collaborators, archiving a project, "
                 "rejecting an answer, or creating a verified fact. Never store "
                 "an inference as verified fact."
             ),
             (
-                "10. When project-specific evidence remains insufficient after "
+                "11. When project-specific evidence remains insufficient after "
                 "retrieval, do not stop after reporting the gap. Before "
                 "responding, you MUST call get_project and "
                 "list_project_collaborators for the relevant project. State "
@@ -279,8 +366,9 @@ def _server_instructions(container: ServiceContainer) -> str:
                 "Reuse request_id when retrying any write."
             ),
             (
-                "11. For a finished project dossier, follow the dossier skill "
-                "and its inline-citation contract, then call "
+                "12. For a finished project dossier, follow the workflow and "
+                "inline-citation contract returned by "
+                "get_project_dossier_template, then call "
                 "render_project_dossier with the complete final Markdown. "
                 "Return both expiring DOCX and PDF links."
             ),
@@ -288,6 +376,14 @@ def _server_instructions(container: ServiceContainer) -> str:
                 "For participant sales briefs, use the "
                 "participant_sales_brief_generation prompt and follow every "
                 "inline citation requirement."
+            ),
+            (
+                "Dynamic MCP workflow guidance is the default. Call "
+                "get_relay_skill_downloads only when the user asks about "
+                "installation, portability, offline use, or compatibility, or "
+                "when the client cannot use the dynamic workflow tools. Do not "
+                "advertise downloads during ordinary Relay work or claim that "
+                "a skill was installed without client confirmation."
             ),
             f"Connection and browser-upload fallback: {web_url}",
         ]
@@ -374,6 +470,74 @@ def build_mcp_server(
                 "[ADDITIONAL_CONTEXT]",
                 additional_context or "None provided.",
             )
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def get_project_knowledge_workflow() -> McpWorkflowGuide:
+        """Call before substantial Relay project operations.
+
+        Returns the current project, collaboration, retrieval, upload, fact,
+        inbox, question, answer, and safety workflow without requiring a
+        locally installed skill.
+        """
+        return _workflow_guide(
+            workflow="manage-project-knowledge",
+            purpose=(
+                "Manage Relay project knowledge safely through the remote MCP."
+            ),
+            skill_path=_PROJECT_KNOWLEDGE_SKILL_PATH,
+            bundled_reference_path=None,
+            next_action=(
+                "Apply these instructions to the current Relay task, then use "
+                "the narrowest relevant project tools."
+            ),
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def get_project_dossier_template() -> McpWorkflowGuide:
+        """Call before researching or drafting a Relay project artifact.
+
+        Returns the evidence-first dossier workflow plus the complete required
+        Markdown structure, inline-citation contract, style rules, and render
+        handoff for dossiers, sales briefs, success stories, capability stories,
+        and case studies.
+        """
+        return _workflow_guide(
+            workflow="create-project-dossier",
+            purpose=(
+                "Create a source-cited Relay project dossier or related "
+                "business-facing artifact."
+            ),
+            skill_path=_DOSSIER_SKILL_PATH,
+            bundled_reference_path=_DOSSIER_FORMAT_PATH,
+            next_action=(
+                "Treat both workflow_instructions and bundled_reference as the "
+                "binding contract, then begin focused Relay evidence research."
+            ),
+        )
+
+    @mcp.tool(annotations=_READ_ONLY, meta=tool_meta)
+    def get_relay_skill_downloads() -> McpSkillDownloads:
+        """Return optional Relay skill ZIPs and the full plugin bundle.
+
+        Use only when the user asks about installation, portability, offline
+        use, or client compatibility, or when dynamic MCP workflow retrieval is
+        unavailable. Ordinary Relay work should use the workflow tools instead.
+        """
+        base_url = _web_application_url(container)
+        if base_url is None:
+            raise ValueError("Relay skill download URLs are not configured")
+        manifest = _skill_download_manifest()
+        return McpSkillDownloads(
+            version=manifest.version,
+            plugin_bundle=_skill_download(
+                manifest.plugin_bundle,
+                base_url=base_url,
+            ),
+            skills=[
+                _skill_download(artifact, base_url=base_url)
+                for artifact in manifest.skills
+            ],
         )
 
     if oauth_provider is not None:

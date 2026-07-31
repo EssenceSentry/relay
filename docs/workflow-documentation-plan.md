@@ -13,17 +13,18 @@ The demonstration should prove one idea:
 > evidence, create cited artifacts, and close knowledge gaps without leaving
 > their agent.
 
-The website is intentionally small. It exists only to explain the connection
-options, authenticate the user, and accept a file when an agent cannot upload a
-local binary directly.
+The website is intentionally small. It exists only to expose the MCP
+connection, authenticate the user, and accept a file when an agent cannot
+upload a local binary directly.
 
 ## Documentation set to produce
 
 Create the final documentation in this order:
 
 1. **Connect Relay to an agent**
-   - Plugin installation for Codex and Claude.
-   - MCP-only connection for compatible clients.
+   - Remote MCP connection for Codex, Claude, and compatible clients.
+   - Dynamic workflow discovery through the MCP.
+   - Optional skill ZIPs for portability or client compatibility.
    - Cognito sign-in and connection verification.
 2. **Create and manage a project**
    - Create, inspect, rename, archive, and restore.
@@ -37,7 +38,7 @@ Create the final documentation in this order:
    - Project-scoped search.
    - Opening complete source text before citing it.
 5. **Create a cited project dossier**
-   - Skill invocation.
+   - `get_project_dossier_template` workflow retrieval.
    - Evidence collection.
    - Inline citations, inference labels, and known gaps.
 6. **Ask and answer a project question**
@@ -101,7 +102,7 @@ record a separate live demonstration later.
 
 - Landing page: `https://essencesentry.shop/`
 - MCP endpoint: `https://essencesentry.shop/mcp/`
-- Codex desktop with the Relay plugin installed or the MCP connected.
+- Codex desktop with the Relay MCP connected.
 - Chrome with Outlook signed in to the assigned Blend360 mailbox.
 
 ### Test project
@@ -218,43 +219,22 @@ and make that answer reusable.
    - manage projects and knowledge gaps.
 3. Point out that there is no project workspace on the site.
 4. Show the “A small interface, on purpose” explanation.
-5. In the connection card, open the information overlay.
-6. Explain the two choices:
-   - **Plugin:** MCP connection plus Relay's agent skills.
-   - **MCP only:** the same tools without the additional workflow guidance.
-7. Close the overlay.
-8. Show the single plugin download button and the copyable MCP URL.
+5. Show the single copyable remote MCP URL.
+6. Explain that Relay supplies its current project and dossier workflows
+   dynamically after the agent connects.
 
 Capture:
 
 - the landing-page hero;
-- the connection card and its information overlay;
+- the MCP connection card;
 - the deliberate absence of a browser project workspace.
 
 Expected result:
 
 - the audience understands that the agent is the product surface;
-- the website has one plugin download action and one MCP URL.
+- the website presents one unambiguous MCP connection path.
 
-## 2. Install or connect Relay in Codex
-
-### Preferred plugin path
-
-1. Download the Relay plugin from the landing page.
-2. Open Codex desktop's plugin settings.
-3. Install the downloaded Relay bundle using the local plugin installation
-   control exposed by the current Codex build.
-4. Confirm that the plugin contributes:
-   - the `relay` MCP;
-   - the **Manage Project Knowledge** skill;
-   - the **Create Project Dossier** skill.
-5. Start a new Codex conversation after installation so skill discovery is
-   clean.
-
-Record the exact Codex menu labels during rehearsal because desktop labels may
-change between builds.
-
-### MCP-only fallback
+## 2. Connect Relay in Codex
 
 1. Copy `https://essencesentry.shop/mcp/` from the landing page.
 2. In Codex settings, choose the custom MCP connection option.
@@ -262,11 +242,19 @@ change between builds.
 4. Select **Streamable HTTP**.
 5. Paste the MCP URL.
 6. Save and connect.
+7. Confirm that substantial project work can call
+   `get_project_knowledge_workflow` and dossier work can call
+   `get_project_dossier_template` without a locally installed skill.
+8. Treat `get_relay_skill_downloads` as an optional compatibility mechanism,
+   not part of ordinary onboarding.
+
+Record the exact Codex menu labels during rehearsal because desktop labels may
+change between builds.
 
 Capture:
 
-- the installed plugin or custom MCP entry;
-- the presence of the two skills when using the plugin;
+- the connected custom MCP entry;
+- one dynamic workflow response with its content hash;
 - the connected status, without exposing tokens.
 
 Expected result:
@@ -458,7 +446,7 @@ Expected result:
    > Create an executive dossier for the NCL machine-learning modernization
    > project.
 
-2. Verify that the plugin selects the **Create Project Dossier** skill.
+2. Verify that the agent calls `get_project_dossier_template` before research.
 3. Observe the agent:
    - resolve the exact project;
    - start with several focused `search_all_projects` calls;
@@ -479,7 +467,7 @@ Expected result:
 
 Capture:
 
-- skill invocation;
+- the dynamic dossier workflow response;
 - a concise excerpt of the finished brief;
 - one metric citation, one inference label, and one known gap when available.
 - the returned DOCX and PDF links;
@@ -488,8 +476,8 @@ Capture:
 Expected result:
 
 - the result is a business-facing brief, not retrieval narration;
-- the agent follows the skill's editorial contract in addition to MCP tool
-  schemas;
+- the agent follows the dynamically returned editorial contract in addition to
+  MCP tool schemas;
 - retrying with the same request ID refreshes the links without creating a
   second dossier render.
 
@@ -755,8 +743,8 @@ Expected result:
 
 Capture these items while rehearsing:
 
-- [ ] Landing page and connection explanation.
-- [ ] Plugin installed with both skills, or MCP-only configuration.
+- [ ] Landing page and MCP connection explanation.
+- [ ] MCP configuration and dynamic workflow retrieval.
 - [ ] OAuth sign-in and connected Codex state.
 - [ ] `get_current_user` result.
 - [ ] Project creation and permission fields.

@@ -78,23 +78,16 @@
             <img src="assets/knowledge-hub.png" alt="" />
             <div class="connection-heading">
               <div>
-                <p class="eyebrow">Plugin or MCP</p>
+                <p class="eyebrow">Remote MCP</p>
                 <h2>Connect Relay</h2>
               </div>
-              <button id="open-connection-info" class="info-link" type="button">
-                <span aria-hidden="true">i</span>
-                What’s the difference?
-              </button>
             </div>
-            <a
-              id="download-plugin"
-              class="button button-primary plugin-download"
-              href="downloads/relay-bundle.zip"
-              download
-            >
-              Download plugin
-            </a>
-            <p class="connection-or">or copy the MCP URL</p>
+            <p class="connection-note">
+              Add this Streamable HTTP server to Codex, Claude, or another
+              MCP-compatible agent. Relay supplies its current workflows after
+              the connection is established.
+            </p>
+            <label class="connection-label" for="mcp-url">Remote MCP URL</label>
             <div class="connection-url">
               <input id="mcp-url" aria-label="Remote MCP URL" readonly value="Loading…" />
               <button id="copy-mcp-url" class="button button-quiet button-small" type="button">
@@ -133,43 +126,6 @@
           </div>
         </section>
       </section>
-
-      <div
-        id="connection-info-modal"
-        class="modal-backdrop hidden"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="connection-info-title"
-      >
-        <section class="connection-explainer panel">
-          <button
-            id="close-connection-info"
-            class="modal-close"
-            type="button"
-            aria-label="Close"
-          >
-            ×
-          </button>
-          <p class="eyebrow">Connection options</p>
-          <h2 id="connection-info-title">Same knowledge, different guidance.</h2>
-          <div class="explainer-options">
-            <article>
-              <strong>Plugin</strong>
-              <p>
-                MCP tools plus Relay skills for project operations and cited
-                briefs. Best for Codex or Claude.
-              </p>
-            </article>
-            <article>
-              <strong>MCP only</strong>
-              <p>
-                The same tools without Relay’s workflow guidance. Works with
-                any Streamable HTTP MCP client.
-              </p>
-            </article>
-          </div>
-        </section>
-      </div>
 
       <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     </main>

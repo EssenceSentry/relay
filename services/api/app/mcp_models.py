@@ -357,6 +357,49 @@ class McpDossierRender(McpModel):
     )
 
 
+class McpWorkflowGuide(McpModel):
+    workflow: Literal[
+        "manage-project-knowledge",
+        "create-project-dossier",
+    ]
+    purpose: str
+    workflow_instructions: str
+    bundled_reference: str | None = None
+    content_sha256: str
+    next_action: str
+
+
+class McpDownloadArtifactManifest(McpModel):
+    name: str
+    description: str
+    filename: str
+    sha256: str
+
+
+class McpSkillDownloadManifest(McpModel):
+    version: str
+    plugin_bundle: McpDownloadArtifactManifest
+    skills: list[McpDownloadArtifactManifest]
+
+
+class McpSkillDownload(McpDownloadArtifactManifest):
+    url: str
+
+
+class McpSkillDownloads(McpModel):
+    version: str
+    plugin_bundle: McpSkillDownload
+    skills: list[McpSkillDownload]
+    default_usage: str = (
+        "Use Relay's MCP workflow tools by default. Install these archives "
+        "only for portability, offline reference, or client compatibility."
+    )
+    next_action: str = (
+        "Give the user only the download option relevant to their client. "
+        "Do not claim an archive is installed unless the client confirms it."
+    )
+
+
 class McpVerifiedFact(McpModel):
     project_id: str
     fact_id: str

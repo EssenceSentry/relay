@@ -13,9 +13,6 @@ def test_frontend_splits_connection_and_contextual_upload_pages() -> None:
     for required in (
         'id="login-button"',
         'id="mcp-url"',
-        'id="download-plugin"',
-        'id="open-connection-info"',
-        'id="connection-info-modal"',
         'id="logout-button"',
     ):
         assert required in landing
@@ -23,14 +20,16 @@ def test_frontend_splits_connection_and_contextual_upload_pages() -> None:
     assert "Create cited briefs" in landing
     assert "Manage projects and knowledge gaps" in landing
     assert "A small interface, on purpose" in landing
-    assert 'id="plugin-modal"' not in landing
-    assert "Same knowledge, different guidance." in landing
+    assert "Remote MCP" in landing
+    assert "Relay supplies its current workflows" in landing
     assert 'href="assets/icon-mark.png"' in landing
     assert 'src="assets/icon-mark.png"' in landing
     assert 'href="assets/icon-mark.png"' in upload
     assert 'src="assets/icon-mark.png"' in upload
-    assert landing.count('id="download-plugin"') == 1
-    assert "or copy the MCP URL" in landing
+    assert 'id="download-plugin"' not in landing
+    assert 'id="connection-info-modal"' not in landing
+    assert "Download plugin" not in landing
+    assert "Remote MCP URL" in landing
     for required in (
         'id="login-button"',
         'id="upload-panel"',

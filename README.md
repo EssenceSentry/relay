@@ -4,8 +4,8 @@
 
 Relay is an agent-native project knowledge system for Blend360. Codex, Claude,
 or another authenticated MCP client is the primary application surface. The web
-page is intentionally limited to connection help, login, plugin download, and
-direct-to-S3 document upload.
+page is intentionally limited to MCP connection help, login, and direct-to-S3
+document upload.
 
 The local source implements API/MCP contract `1.0.0`. It is not deployed by
 normal development or test commands.
@@ -59,7 +59,8 @@ optional Route 53 and SES domain resources.
 
 ## API and MCP v1
 
-Every authenticated API operation has a same-named, typed MCP tool:
+Every authenticated application operation has a same-named, typed MCP tool.
+The MCP additionally exposes read-only workflow and compatibility guidance:
 
 | Area | Operations |
 | --- | --- |
@@ -71,9 +72,12 @@ Every authenticated API operation has a same-named, typed MCP tool:
 | Dossiers | `render_project_dossier` |
 | Facts | `list_verified_facts`, `create_verified_fact` |
 | Questions | `list_project_questions`, `list_my_assigned_questions`, `get_project_question`, `list_question_answers`, `create_project_question`, `submit_question_answer`, `review_question_answer`, `resend_question_email` |
+| MCP guidance | `get_project_knowledge_workflow`, `get_project_dossier_template`, `get_relay_skill_downloads` |
 
-The parity test treats only health, OAuth protocol routes, static configuration,
-and inbound-email infrastructure as exemptions. Legacy MCP names are absent.
+The parity test keeps application operations aligned across API and MCP while
+explicitly allowing the three MCP-only guidance tools. Health, OAuth protocol
+routes, static configuration, and inbound-email infrastructure remain outside
+that operation contract. Legacy MCP names are absent.
 
 MCP results are bounded Pydantic models with stable IDs, status, permission
 hints, warnings where relevant, and a next action. The server tells agents to
@@ -202,8 +206,8 @@ intentional collaborator removals create suppression records.
 
 The website has two deliberately narrow pages:
 
-- `/` contains public branding, the MCP URL, connection instructions, plugin
-  download, Cognito login, authenticated identity, and sign-out;
+- `/` contains public branding, the MCP URL, connection instructions, Cognito
+  login, authenticated identity, and sign-out;
 - `/upload.html` accepts the project and stable request ID from an agent- or
   email-generated URL, verifies that fixed project context after login, and
   provides direct-to-S3 file selection/drop, transfer progress, and
@@ -216,11 +220,22 @@ It intentionally has no project browser, creation form, search results,
 document manager, downloads, questions, notifications, collaboration controls,
 or answer submission.
 
-## Agent plugin
+## MCP workflows and compatibility downloads
+
+Relay serves its current agent guidance directly through the MCP. Agents call
+`get_project_knowledge_workflow` before substantial project operations and
+`get_project_dossier_template` before researching or drafting a dossier, sales
+brief, success story, capability story, or case study. The responses use the
+tracked skill Markdown as their source of truth and include a content hash, so
+no local skill installation is required.
+
+`get_relay_skill_downloads` returns optional individual skill archives and the
+full plugin bundle with checksums. It is for portability, offline reference, or
+client compatibility; ordinary Relay work uses the dynamic workflow tools.
 
 `frontend/downloads/relay-bundle.zip` is a deterministic
-Codex/Claude bundle at version `1.0.3`. It contains the authenticated remote MCP
-configuration and two skills:
+Codex/Claude compatibility bundle at version `1.0.4`. It contains the
+authenticated remote MCP configuration and two skills:
 
 - `manage-project-knowledge`: safe project, collaborator, retrieval, upload,
   fact, inbox, and question workflows;
@@ -233,7 +248,7 @@ additional_context?)`. It requires material claims and every metric to be cited
 next to the claim, labels synthesis as **Inference**, and uses **Known gap**
 instead of guessing.
 
-Rebuild the archive and checksum locally:
+Rebuild the plugin and skill archives, checksums, and download manifest locally:
 
 ```bash
 uv run python scripts/build_plugin_bundle.py

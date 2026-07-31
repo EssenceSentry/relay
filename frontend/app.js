@@ -405,17 +405,6 @@ async function copyMcpUrl() {
   toast("MCP URL copied.");
 }
 
-function openConnectionInfo() {
-  $("connection-info-modal")?.classList.remove("hidden");
-  document.body.classList.add("modal-open");
-  $("close-connection-info")?.focus();
-}
-
-function closeConnectionInfo() {
-  $("connection-info-modal")?.classList.add("hidden");
-  document.body.classList.remove("modal-open");
-}
-
 let toastTimer = null;
 function toast(message, isError = false) {
   const node = $("toast");
@@ -433,14 +422,6 @@ $("logout-button")?.addEventListener("click", logout);
 $("copy-mcp-url")?.addEventListener("click", () =>
   copyMcpUrl().catch(console.error),
 );
-$("open-connection-info")?.addEventListener("click", openConnectionInfo);
-$("close-connection-info")?.addEventListener("click", closeConnectionInfo);
-$("connection-info-modal")?.addEventListener("click", (event) => {
-  if (event.target === $("connection-info-modal")) closeConnectionInfo();
-});
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeConnectionInfo();
-});
 
 const dropZone = $("drop-zone");
 if (dropZone) {
