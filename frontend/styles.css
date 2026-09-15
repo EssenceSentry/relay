@@ -126,6 +126,18 @@ button {
   gap: 24px;
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.github-link {
+  flex-shrink: 0;
+  gap: 8px;
+  color: var(--ink);
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -885,6 +897,20 @@ select {
 
   .topbar {
     min-height: 74px;
+  }
+
+  .landing-topbar {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 0;
+  }
+
+  .landing-topbar .topbar-actions {
+    margin-left: auto;
+  }
+
+  .github-label {
+    display: none;
   }
 
   .brand small {
