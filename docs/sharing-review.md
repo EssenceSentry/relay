@@ -59,6 +59,12 @@ a verified session-revocation policy and an absolute reauthentication deadline.
 The Microsoft cutover correctly rejects older non-SSO broker tokens; that is a
 separate guarantee from ongoing upstream identity revocation.
 
+**Dependency fixes require a deployment to reach running services.** The
+repository raises the PDF parser and cryptography minimums to the patched
+versions identified by GitHub alerts. The local lock uses `pypdf==6.16.1` and
+`cryptography==50.0.0`; API and ingestion requirements carry matching minimums.
+No service image was rebuilt or deployed during this review.
+
 **Deployment defaults are intended for disposable infrastructure.**
 `cdk.json` sets `retain_data=false`. That selects destructive removal policies,
 bucket cleanup, and disabled DynamoDB point-in-time recovery. A durable rollout

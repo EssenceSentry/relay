@@ -1,4 +1,5 @@
 boto3>=1.43,<2
+cryptography>=50,<51
 fastapi>=0.128,<1
 mcp>=1.28.1,<2
 openai>=2.15,<3
