@@ -126,12 +126,6 @@ button {
   gap: 24px;
 }
 
-.topbar-left {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
 .github-link {
   flex-shrink: 0;
   gap: 8px;
