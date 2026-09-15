@@ -10,6 +10,8 @@
     "matching_model": "gpt-5.6-luna",
     "matching_threshold": 0.95,
     "name_invitations_enabled": false,
+    "microsoft_sso": true,
+    "microsoft_sso_secret_name": "blend-knowledge/sso/microsoft",
     "demo_allow_gmail_logins": false,
     "cognito_use_ses_email": false
   }

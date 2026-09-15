@@ -1,3 +1,9 @@
+> **Historical architecture proposal.** This document predates API/MCP contract
+> v1 and the Microsoft SSO cutover. Its statements about public access, missing
+> tools, and browser answer pages describe the old implementation. See the
+> [current README](README.md) and [sharing review](docs/sharing-review.md) for
+> the implemented behavior and current assessment.
+
 The API already supports the agent-side expert workflow you are describing:
 
 * list questions assigned to the current identity;

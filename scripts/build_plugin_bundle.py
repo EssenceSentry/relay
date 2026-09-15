@@ -142,7 +142,7 @@ def _archive_tree(source: Path, destination: Path) -> None:
         compresslevel=9,
     ) as archive:
         for path in sorted(source.rglob("*")):
-            if not path.is_file():
+            if not path.is_file() or path.name == ".DS_Store":
                 continue
             relative = Path(root_name) / path.relative_to(source)
             info = zipfile.ZipInfo.from_file(path, arcname=relative.as_posix())

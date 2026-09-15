@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from app.auth import Principal
 from app.mcp_oauth import (
     MCP_SCOPE,
@@ -19,6 +20,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from mcp.server.auth.provider import (
     AuthorizationParams,
+    TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
@@ -109,6 +111,7 @@ class OAuthSettings:
     allowed_login_email_domains: frozenset[str] = frozenset(
         {"blend360.com", "gmail.com"}
     )
+    required_identity_provider: str | None = None
     mcp_cognito_client_id: str = "cognito-client"
     mcp_cognito_domain: str = "https://login.example.com"
     mcp_public_base_url: str = "https://d111111abcdef8.cloudfront.net"
@@ -304,6 +307,127 @@ def test_dynamic_registration_and_cognito_authorization_flow() -> None:
     assert (
         asyncio.run(provider.load_refresh_token(client, refresh.token)) is None
     )
+
+
+def test_cognito_authorization_targets_required_identity_provider() -> None:
+    store = FakeOAuthStore()
+    provider = StubOAuthProvider(
+        store=store,  # type: ignore[arg-type]
+        settings=OAuthSettings(required_identity_provider="Microsoft"),
+    )
+    client = OAuthClientInformationFull(
+        client_id="client-123",
+        client_secret="client-secret",
+        redirect_uris=[AnyUrl("https://client.example/callback")],
+        token_endpoint_auth_method="client_secret_post",
+        scope=MCP_SCOPE,
+    )
+    params = AuthorizationParams(
+        state="client-state",
+        scopes=[MCP_SCOPE],
+        code_challenge="client-pkce-challenge",
+        redirect_uri=AnyUrl("https://client.example/callback"),
+        redirect_uri_provided_explicitly=True,
+        resource="https://d111111abcdef8.cloudfront.net/mcp/",
+    )
+
+    cognito_url = asyncio.run(provider.authorize(client, params))
+
+    query = parse_qs(urlsplit(cognito_url).query)
+    assert query["identity_provider"] == ["Microsoft"]
+
+
+def test_sso_cutover_rejects_old_tokens_and_preserves_sso_refresh() -> None:
+    store = FakeOAuthStore()
+    old_provider = _provider(store)
+    sso_provider = StubOAuthProvider(
+        store=store,  # type: ignore[arg-type]
+        settings=OAuthSettings(required_identity_provider="Microsoft"),
+    )
+    client = OAuthClientInformationFull(
+        client_id="cutover-client",
+        redirect_uris=[AnyUrl("https://client.example/callback")],
+    )
+
+    def authorize(provider: StubOAuthProvider) -> str:
+        params = AuthorizationParams(
+            state="client-state",
+            scopes=[MCP_SCOPE],
+            code_challenge="challenge",
+            redirect_uri=AnyUrl("https://client.example/callback"),
+            redirect_uri_provided_explicitly=True,
+        )
+        url = asyncio.run(provider.authorize(client, params))
+        broker_state = parse_qs(urlsplit(url).query)["state"][0]
+        callback = asyncio.run(
+            provider.complete_cognito_authorization(
+                state=broker_state,
+                code="cognito-code",
+            )
+        )
+        return parse_qs(urlsplit(callback).query)["code"][0]
+
+    old_code_value = authorize(old_provider)
+    old_code = asyncio.run(
+        old_provider.load_authorization_code(client, old_code_value)
+    )
+    assert old_code is not None
+    old_tokens = asyncio.run(
+        old_provider.exchange_authorization_code(client, old_code)
+    )
+    old_refresh = asyncio.run(
+        old_provider.load_refresh_token(client, str(old_tokens.refresh_token))
+    )
+    assert old_refresh is not None
+    assert (
+        asyncio.run(sso_provider.verify_token(old_tokens.access_token)) is None
+    )
+    assert (
+        asyncio.run(sso_provider.load_refresh_token(client, old_refresh.token))
+        is None
+    )
+    with pytest.raises(TokenError):
+        asyncio.run(
+            sso_provider.exchange_refresh_token(
+                client, old_refresh, [MCP_SCOPE]
+            )
+        )
+
+    pending_old_value = authorize(old_provider)
+    pending_old = asyncio.run(
+        old_provider.load_authorization_code(client, pending_old_value)
+    )
+    assert pending_old is not None
+    assert (
+        asyncio.run(
+            sso_provider.load_authorization_code(client, pending_old_value)
+        )
+        is None
+    )
+    with pytest.raises(TokenError):
+        asyncio.run(
+            sso_provider.exchange_authorization_code(client, pending_old)
+        )
+
+    new_code_value = authorize(sso_provider)
+    new_code = asyncio.run(
+        sso_provider.load_authorization_code(client, new_code_value)
+    )
+    assert new_code is not None
+    new_tokens = asyncio.run(
+        sso_provider.exchange_authorization_code(client, new_code)
+    )
+    new_refresh = asyncio.run(
+        sso_provider.load_refresh_token(client, str(new_tokens.refresh_token))
+    )
+    assert new_refresh is not None
+    refreshed = asyncio.run(
+        sso_provider.exchange_refresh_token(client, new_refresh, [MCP_SCOPE])
+    )
+    access = asyncio.run(sso_provider.verify_token(refreshed.access_token))
+    assert access is not None
+    assert access.claims is not None
+    assert access.claims["identity_provider"] == "Microsoft"
 
 
 def test_http_oauth_flow_issues_an_access_token() -> None:

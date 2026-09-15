@@ -164,6 +164,28 @@ def _optional_iam_principal_arn(
     return value
 
 
+def _pre_sign_up_code(allowed_email_domains: tuple[str, ...]) -> str:
+    return (
+        "ALLOWED_EMAIL_DOMAINS = frozenset("
+        f"{allowed_email_domains!r})\n\n"
+        """
+def handler(event, context):
+    del context
+    attributes = event.get("request", {}).get("userAttributes", {})
+    email = str(attributes.get("email") or "").strip().casefold()
+    local, separator, domain = email.rpartition("@")
+    if not separator or not local or domain not in ALLOWED_EMAIL_DOMAINS:
+        allowed = ", ".join(f"@{value}" for value in ALLOWED_EMAIL_DOMAINS)
+        raise ValueError(f"Registration requires an email from: {allowed}")
+    if event.get("triggerSource") == "PreSignUp_ExternalProvider":
+        response = event.setdefault("response", {})
+        response["autoConfirmUser"] = True
+        response["autoVerifyEmail"] = True
+    return event
+""".strip()
+    )
+
+
 class KnowledgeStack(Stack):
     def __init__(
         self,
@@ -440,7 +462,7 @@ class KnowledgeStack(Stack):
         user_pool = cognito.UserPool(
             self,
             "UserPool",
-            self_sign_up_enabled=True,
+            self_sign_up_enabled=not microsoft_sso_enabled,
             sign_in_aliases=cognito.SignInAliases(email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
@@ -474,24 +496,7 @@ class KnowledgeStack(Stack):
             group_name="admins",
             description="Global Relay administrators",
         )
-        pre_signup_code = (
-            "# TEMPORARY HACKATHON DEMO HACK: gmail.com may be in this set "
-            "only because Blend quarantines Cognito email. Remove the "
-            "deployment flag when Microsoft SSO is enabled.\n"
-            "ALLOWED_EMAIL_DOMAINS = frozenset("
-            f"{allowed_login_email_domains!r})\n\n"
-            """
-def handler(event, context):
-    del context
-    attributes = event.get("request", {}).get("userAttributes", {})
-    email = str(attributes.get("email") or "").strip().casefold()
-    local, separator, domain = email.rpartition("@")
-    if not separator or not local or domain not in ALLOWED_EMAIL_DOMAINS:
-        allowed = ", ".join(f"@{value}" for value in ALLOWED_EMAIL_DOMAINS)
-        raise ValueError(f"Registration requires an email from: {allowed}")
-    return event
-""".strip()
-        )
+        pre_signup_code = _pre_sign_up_code(allowed_login_email_domains)
         pre_signup_function = lambda_.Function(
             self,
             "BlendEmailPreSignUpFunction",
@@ -1030,11 +1035,19 @@ function handler(event) {
             cognito.UserPoolOperation.POST_CONFIRMATION,
             identity_function,  # pyright: ignore[reportArgumentType]
         )
+        if microsoft_sso_enabled:
+            user_pool.add_trigger(
+                cognito.UserPoolOperation.PRE_TOKEN_GENERATION,
+                identity_function,  # pyright: ignore[reportArgumentType]
+            )
         table.grant_read_write_data(identity_function)
         matching_queue.grant_send_messages(identity_function)
         identity_function.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["cognito-idp:AdminAddUserToGroup"],
+                actions=[
+                    "cognito-idp:AdminAddUserToGroup",
+                    "cognito-idp:AdminUpdateUserAttributes",
+                ],
                 resources=[
                     (
                         f"arn:{self.partition}:cognito-idp:{self.region}:"
@@ -1207,6 +1220,9 @@ function handler(event) {
                 "USER_POOL_CLIENT_ID": user_pool_client.user_pool_client_id,
                 "ALLOWED_LOGIN_EMAIL_DOMAINS": ",".join(
                     allowed_login_email_domains
+                ),
+                "REQUIRED_IDENTITY_PROVIDER": (
+                    "Microsoft" if microsoft_sso_enabled else ""
                 ),
                 "INITIAL_ADMIN_EMAILS": ",".join(initial_admin_emails),
                 "MCP_AUTH_ENABLED": ("true" if mcp_auth_enabled else "false"),
@@ -1492,6 +1508,9 @@ function handler(event) {
                         "api_base_url": api_endpoint,
                         "cognito_domain": user_pool_domain.base_url(),
                         "client_id": user_pool_client.user_pool_client_id,
+                        "identity_provider": (
+                            "Microsoft" if microsoft_sso_enabled else None
+                        ),
                         "redirect_uri": frontend_url,
                         "logout_uri": frontend_url,
                         "mcp_url": mcp_url,

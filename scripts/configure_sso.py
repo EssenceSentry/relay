@@ -18,7 +18,7 @@ SECRET_NAMES = {"microsoft": "blend-knowledge/sso/microsoft"}
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Store Microsoft Entra OAuth credentials for future Blend SSO. "
+            "Store Microsoft Entra OAuth credentials for Relay SSO. "
             "Secrets are never printed or written locally."
         )
     )
@@ -133,8 +133,7 @@ def main() -> None:
         response = secrets.create_secret(
             Name=secret_name,
             Description=(
-                f"{provider.title()} OAuth client used by "
-                "Blend Knowledge Cognito SSO"
+                f"{provider.title()} OAuth client used by Relay Cognito SSO"
             ),
             SecretString=secret_string,
         )

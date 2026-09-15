@@ -44,6 +44,9 @@ class CognitoMcpSettings(Protocol):
     def allowed_login_email_domains(self) -> frozenset[str]: ...
 
     @property
+    def required_identity_provider(self) -> str | None: ...
+
+    @property
     def mcp_cognito_client_id(self) -> str: ...
 
     @property
@@ -93,11 +96,13 @@ class CognitoMcpOAuthProvider:
         self._callback_url = f"{settings.mcp_public_base_url}/oauth/callback"
         self._cognito_domain = settings.mcp_cognito_domain.rstrip("/")
         self._cognito_client_id = settings.mcp_cognito_client_id
+        self._identity_provider = settings.required_identity_provider
         self._cognito_verifier = CognitoVerifier(
             region=settings.aws_region,
             user_pool_id=settings.user_pool_id,
             client_id=settings.mcp_cognito_client_id,
             allowed_email_domains=settings.allowed_login_email_domains,
+            required_identity_provider=settings.required_identity_provider,
         )
 
     async def get_client(
@@ -155,17 +160,18 @@ class CognitoMcpOAuthProvider:
             },
             expires_at=now + _COGNITO_LOGIN_SECONDS,
         )
-        query = urlencode(
-            {
-                "response_type": "code",
-                "client_id": self._cognito_client_id,
-                "redirect_uri": self._callback_url,
-                "scope": "openid email profile",
-                "state": broker_state,
-                "code_challenge": _pkce_challenge(cognito_verifier),
-                "code_challenge_method": "S256",
-            }
-        )
+        authorize_parameters = {
+            "response_type": "code",
+            "client_id": self._cognito_client_id,
+            "redirect_uri": self._callback_url,
+            "scope": "openid email profile",
+            "state": broker_state,
+            "code_challenge": _pkce_challenge(cognito_verifier),
+            "code_challenge_method": "S256",
+        }
+        if self._identity_provider:
+            authorize_parameters["identity_provider"] = self._identity_provider
+        query = urlencode(authorize_parameters)
         return f"{self._cognito_domain}/oauth2/authorize?{query}"
 
     async def complete_cognito_authorization(
@@ -208,6 +214,7 @@ class CognitoMcpOAuthProvider:
                 "subject": principal.subject,
                 "email": principal.email,
                 "groups": sorted(principal.groups),
+                "identity_provider": self._identity_provider or "",
             },
             expires_at=now + _AUTHORIZATION_CODE_SECONDS,
         )
@@ -265,7 +272,11 @@ class CognitoMcpOAuthProvider:
         authorization_code: str,
     ) -> AuthorizationCode | None:
         data = self._store.get_authorization_code(authorization_code)
-        if data is None or data.get("client_id") != client.client_id:
+        if (
+            data is None
+            or data.get("client_id") != client.client_id
+            or not self._accepts_identity(data)
+        ):
             return None
         return self._authorization_code(authorization_code, data)
 
@@ -275,7 +286,11 @@ class CognitoMcpOAuthProvider:
         authorization_code: AuthorizationCode,
     ) -> OAuthToken:
         data = self._store.consume_authorization_code(authorization_code.code)
-        if data is None or data.get("client_id") != client.client_id:
+        if (
+            data is None
+            or data.get("client_id") != client.client_id
+            or not self._accepts_identity(data)
+        ):
             raise TokenError(
                 "invalid_grant",
                 "The authorization code was already used or has expired.",
@@ -287,6 +302,7 @@ class CognitoMcpOAuthProvider:
             subject=str(data["subject"]),
             email=str(data["email"]),
             groups=list(data.get("groups") or []),
+            identity_provider=str(data.get("identity_provider") or ""),
         )
 
     async def load_refresh_token(
@@ -295,7 +311,11 @@ class CognitoMcpOAuthProvider:
         refresh_token: str,
     ) -> RefreshToken | None:
         data = self._store.get_refresh_token(refresh_token)
-        if data is None or data.get("client_id") != client.client_id:
+        if (
+            data is None
+            or data.get("client_id") != client.client_id
+            or not self._accepts_identity(data)
+        ):
             return None
         return RefreshToken(
             token=refresh_token,
@@ -312,7 +332,11 @@ class CognitoMcpOAuthProvider:
         scopes: list[str],
     ) -> OAuthToken:
         data = self._store.consume_refresh_token(refresh_token.token)
-        if data is None or data.get("client_id") != client.client_id:
+        if (
+            data is None
+            or data.get("client_id") != client.client_id
+            or not self._accepts_identity(data)
+        ):
             raise TokenError(
                 "invalid_grant",
                 "The refresh token was already used or has expired.",
@@ -324,6 +348,7 @@ class CognitoMcpOAuthProvider:
             subject=str(data["subject"]),
             email=str(data["email"]),
             groups=list(data.get("groups") or []),
+            identity_provider=str(data.get("identity_provider") or ""),
         )
 
     async def load_access_token(self, token: str) -> AccessToken | None:
@@ -331,7 +356,7 @@ class CognitoMcpOAuthProvider:
 
     async def verify_token(self, token: str) -> AccessToken | None:
         data = self._store.get_access_token(token)
-        if data is not None:
+        if data is not None and self._accepts_identity(data):
             return AccessToken(
                 token=token,
                 client_id=str(data["client_id"]),
@@ -343,9 +368,20 @@ class CognitoMcpOAuthProvider:
                     "iss": self._issuer_url,
                     "email": str(data["email"]),
                     "groups": list(data.get("groups") or []),
+                    "identity_provider": str(
+                        data.get("identity_provider") or ""
+                    ),
                 },
             )
         return None
+
+    def _accepts_identity(self, data: dict[str, Any]) -> bool:
+        # Records issued before SSO was enabled carry no provider. Reject them
+        # throughout the broker lifecycle, including direct refresh exchanges.
+        return (
+            self._identity_provider is None
+            or data.get("identity_provider") == self._identity_provider
+        )
 
     async def revoke_token(
         self,
@@ -384,6 +420,7 @@ class CognitoMcpOAuthProvider:
         subject: str,
         email: str,
         groups: list[str],
+        identity_provider: str,
     ) -> OAuthToken:
         now = int(time.time())
         access_token = secrets.token_urlsafe(48)
@@ -397,6 +434,7 @@ class CognitoMcpOAuthProvider:
             "subject": subject,
             "email": email,
             "groups": groups,
+            "identity_provider": identity_provider,
         }
         self._store.put_access_token(
             access_token,

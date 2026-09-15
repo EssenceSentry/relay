@@ -1,6 +1,8 @@
 # Relay
 
-![Relay](readme_hero.png)
+[![Quality](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml/badge.svg)](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml)
+
+![Relay](image_hero.png)
 
 Relay is an agent-native project knowledge system for Blend360. Codex, Claude,
 or another authenticated MCP client is the primary application surface. The web
@@ -10,12 +12,29 @@ document upload.
 The local source implements API/MCP contract `1.0.0`. It is not deployed by
 normal development or test commands.
 
+## Try Relay
+
+[Open Relay](https://essencesentry.shop/) or
+[watch the interactive product story](https://essencesentry.shop/demo.html).
+The story replays a recorded workflow; its actions do not create projects or
+send emails. Live project access requires a Blend Microsoft account.
+
+To use the live system, add `https://essencesentry.shop/mcp/` as a Streamable
+HTTP MCP server in your agent and complete Microsoft sign-in. Ask the agent to
+call `get_current_user`, then `get_project_knowledge_workflow`. Current workflow
+guidance comes from the server; installing the compatibility plugin is optional.
+
+For a technical review, start with the architecture and operation table below.
+The [sharing review](docs/sharing-review.md) records the latest checks and known
+operational limits. The [demonstration runbook](docs/workflow-documentation-plan.md)
+covers the longer workflow using [synthetic examples](docs/example-provenance.md),
+including uploads and explicitly confirmed email.
+
 ## Core behavior
 
-- Cognito password authentication for verified `@blend360.com` employees.
-  The hackathon deployment temporarily also permits any verified `@gmail.com`
-  identity because Blend quarantines Cognito email; this is an explicitly
-  flagged demo workaround, not the production authorization policy.
+- Microsoft Entra SSO for verified `@blend360.com` employees, brokered through
+  Cognito. Password sign-in and self-service Cognito registration are disabled
+  in the deployed SSO configuration.
 - Provider-neutral user profiles and a Cognito `admins` group.
 - All verified employees can discover and read active projects and ask or
   answer questions.
@@ -23,8 +42,8 @@ normal development or test commands.
   rename, answer, and manage collaborators.
 - Only admins can archive or restore projects. There is no permanent project
   deletion.
-- FastAPI and MCP call the same `KnowledgeApplication` service, so permissions
-  and domain errors cannot drift between interfaces.
+- FastAPI and MCP call the same `KnowledgeApplication` service, keeping
+  permission checks and domain rules in one place.
 - All creation, upload, answer, invitation, and notification-producing
   operations require stable request IDs.
 - The unauthenticated demo principal and token-based browser answer API have
@@ -261,11 +280,14 @@ and the AWS CDK CLI for synthesis, and AWS credentials only for authenticated
 CDK lookups or deployment.
 
 ```bash
-uv sync --all-groups
-uv run ruff check .
-uv run pyright
-uv run pytest -q
+uv sync --locked --all-groups
+make check
 ```
+
+`make check` runs Ruff lint/format checks, strict Pyright, JavaScript syntax,
+and the offline test suite, including API/MCP parity and plugin/archive checks.
+GitHub Actions runs the same command on Python 3.12 and 3.13. Tests use local
+fixtures and do not deploy infrastructure or send email.
 
 Validate both skills:
 
@@ -295,23 +317,28 @@ The script loads non-secret context from `.env`, deploys infrastructure,
 outputs the frontend/API/MCP URLs, and finalizes CloudFront OAuth/CORS settings.
 Set `PUBLIC_DOMAIN=essencesentry.shop` and `EMAIL_DOMAIN=essencesentry.shop` for
 the hackathon domain. `MCP_AUTH_ENABLED` must remain `1`.
-`DEMO_ALLOW_GMAIL_LOGINS=1` is a temporary hackathon-only workaround and must
-be removed when Blend Microsoft SSO becomes the identity provider.
+`DEMO_ALLOW_GMAIL_LOGINS` must remain disabled when Microsoft SSO is enabled.
+Before the first SSO deployment, register the Cognito
+`https://<cognito-domain>/oauth2/idpresponse` callback as a **Web** redirect URI
+in the Blend Entra app, then store the tenant, client ID, and client secret:
 
-After a stack exists:
+```bash
+SSO_CLIENT_SECRET='...' uv run python scripts/configure_sso.py microsoft \
+  --tenant-id '<tenant-id>' --client-id '<client-id>'
+```
+
+After a stack exists, configure the application model credential:
 
 ```bash
 OPENAI_API_KEY='sk-...' ./scripts/configure_openai.sh
-PASSWORD='...' uv run python scripts/create_user.py \
-  agustin.sellanes@blend360.com --admin
 ```
 
 The local bootstrap ingestion helper can create/reuse a project and upload
 source files through the normal S3-triggered pipeline:
 
 ```bash
-uv run python scripts/ingest_local_documents.py "PIH - Dataset" \
-  --project-name "PIH Trial" \
+uv run python scripts/ingest_local_documents.py "docs/demo-data" \
+  --project-name "Relay Synthetic Demo" \
   --uploaded-by agustin.sellanes@blend360.com \
   --count 20
 ```

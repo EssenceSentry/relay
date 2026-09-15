@@ -1,25 +1,32 @@
-.PHONY: sync test lint typecheck check format synth deploy clean
+.PHONY: sync test lint typecheck check format format-check js-check synth deploy clean
 
 sync:
 	uv sync --all-groups
 
 test:
-	uv run pytest
+	uv run --locked python -m pytest
 
 lint:
-	uv run ruff check .
+	uv run --locked ruff check .
 
 typecheck:
-	uv run pyright
+	uv run --locked pyright
 
-check: lint typecheck test
+check: lint format-check typecheck js-check test
+
+format-check:
+	uv run --locked ruff format --check .
+
+js-check:
+	node --check frontend/app.js
+	node --check frontend/demo.js
 
 format:
-	uv run ruff format .
-	uv run ruff check --fix .
+	uv run --locked ruff format .
+	uv run --locked ruff check --fix .
 
 synth:
-	uv run python app.py
+	uv run --locked cdk synth
 
 deploy:
 	./scripts/deploy.sh

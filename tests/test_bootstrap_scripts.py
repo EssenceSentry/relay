@@ -8,6 +8,10 @@ from typing import Any
 
 import pytest
 
+from infrastructure.knowledge_stack import (
+    _pre_sign_up_code,  # pyright: ignore[reportPrivateUsage]
+)
+
 _SCRIPTS = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 bootstrap = importlib.import_module("_bootstrap_aws")
@@ -16,6 +20,42 @@ project_mapping = importlib.import_module("_project_mapping")
 reassign = importlib.import_module("reassign_documents")
 status = importlib.import_module("ingestion_status")
 configure_sso = importlib.import_module("configure_sso")
+
+
+def test_pre_sign_up_verifies_only_external_provider_emails() -> None:
+    namespace: dict[str, Any] = {}
+    exec(_pre_sign_up_code(("blend360.com",)), namespace)
+    handler = namespace["handler"]
+    local_event = {
+        "triggerSource": "PreSignUp_SignUp",
+        "request": {"userAttributes": {"email": "person@blend360.com"}},
+        "response": {},
+    }
+    external_event = {
+        "triggerSource": "PreSignUp_ExternalProvider",
+        "request": {"userAttributes": {"email": "person@blend360.com"}},
+        "response": {},
+    }
+
+    assert handler(local_event, None)["response"] == {}
+    assert handler(external_event, None)["response"] == {
+        "autoConfirmUser": True,
+        "autoVerifyEmail": True,
+    }
+
+
+def test_pre_sign_up_rejects_external_email_outside_blend() -> None:
+    namespace: dict[str, Any] = {}
+    exec(_pre_sign_up_code(("blend360.com",)), namespace)
+    handler = namespace["handler"]
+    event = {
+        "triggerSource": "PreSignUp_ExternalProvider",
+        "request": {"userAttributes": {"email": "person@example.com"}},
+        "response": {},
+    }
+
+    with pytest.raises(ValueError, match=r"@blend360\.com"):
+        handler(event, None)
 
 
 def test_load_stack_context_selects_single_stack(tmp_path: Path) -> None:

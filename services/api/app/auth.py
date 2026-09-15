@@ -10,7 +10,11 @@ from jwt import PyJWKClient
 from pydantic import TypeAdapter, ValidationError
 
 from app.services import ServiceContainer
-from knowledge_core.identity import email_name_tokens, normalize_email
+from knowledge_core.identity import (
+    email_name_tokens,
+    normalize_email,
+    uses_identity_provider,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +52,7 @@ class CognitoVerifier:
         user_pool_id: str,
         client_id: str,
         allowed_email_domains: frozenset[str],
+        required_identity_provider: str | None = None,
     ) -> None:
         if not allowed_email_domains:
             raise ValueError("At least one login email domain is required")
@@ -56,6 +61,7 @@ class CognitoVerifier:
         )
         self._client_id = client_id
         self._allowed_email_domains = allowed_email_domains
+        self._required_identity_provider = required_identity_provider
         self._jwk_client = PyJWKClient(f"{self._issuer}/.well-known/jwks.json")
 
     def verify(self, token: str) -> Principal:
@@ -80,6 +86,16 @@ class CognitoVerifier:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Use the Cognito ID token for this API",
+            )
+        if self._required_identity_provider and not uses_identity_provider(
+            claims,
+            self._required_identity_provider,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Sign-in requires {self._required_identity_provider} SSO"
+                ),
             )
         raw_email = str(claims.get("email") or "")
         if not raw_email:
@@ -154,6 +170,9 @@ def make_principal_dependency(
         user_pool_id=container.settings.user_pool_id,
         client_id=container.settings.user_pool_client_id,
         allowed_email_domains=(container.settings.allowed_login_email_domains),
+        required_identity_provider=(
+            container.settings.required_identity_provider
+        ),
     )
 
     def current_principal(
@@ -179,10 +198,7 @@ def make_principal_dependency(
             )
         identity_source = (
             "MICROSOFT_SSO"
-            if str(principal.claims.get("cognito:username") or "").startswith(
-                "Microsoft_"
-            )
-            or bool(principal.claims.get("identities"))
+            if uses_identity_provider(principal.claims, "Microsoft")
             else str((existing or {}).get("identity_source") or "COGNITO")
         )
         if existing is None or any(

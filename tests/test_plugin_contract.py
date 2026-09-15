@@ -66,7 +66,7 @@ def test_individual_skill_archives_preserve_portable_skill_roots() -> None:
         source_files = {
             path.relative_to(source).as_posix(): path.read_bytes()
             for path in source.rglob("*")
-            if path.is_file()
+            if path.is_file() and path.name != ".DS_Store"
         }
         with zipfile.ZipFile(archive_path) as archive:
             archived_files = {

@@ -86,6 +86,9 @@ async function beginLogin() {
     code_challenge: challenge,
     code_challenge_method: "S256",
   });
+  if (state.config.identity_provider) {
+    params.set("identity_provider", state.config.identity_provider);
+  }
   window.location.assign(`${cognitoBaseUrl()}/oauth2/authorize?${params}`);
 }
 

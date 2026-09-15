@@ -28,7 +28,11 @@ class FakeSigningKeyClient(PyJWKClient):
         return FakeSigningKey()
 
 
-def _container(*, auth_enabled: bool) -> Any:
+def _container(
+    *,
+    auth_enabled: bool,
+    required_identity_provider: str | None = None,
+) -> Any:
     return SimpleNamespace(
         settings=SimpleNamespace(
             mcp_auth_enabled=auth_enabled,
@@ -38,6 +42,7 @@ def _container(*, auth_enabled: bool) -> Any:
             allowed_login_email_domains=frozenset(
                 {"blend360.com", "gmail.com"}
             ),
+            required_identity_provider=required_identity_provider,
             initial_admin_emails=frozenset({"essence.sentry@gmail.com"}),
         )
     )
@@ -61,12 +66,18 @@ def test_authenticated_mode_still_requires_a_bearer_token() -> None:
     assert error.value.detail == "Missing bearer token"
 
 
-def _verifier(monkeypatch: pytest.MonkeyPatch, claims: dict[str, Any]):
+def _verifier(
+    monkeypatch: pytest.MonkeyPatch,
+    claims: dict[str, Any],
+    *,
+    required_identity_provider: str | None = None,
+):
     verifier = CognitoVerifier(
         region="us-east-1",
         user_pool_id="us-east-1_example",
         client_id="client-id",
         allowed_email_domains=frozenset({"blend360.com", "gmail.com"}),
+        required_identity_provider=required_identity_provider,
     )
     verifier._jwk_client = FakeSigningKeyClient()  # pyright: ignore[reportPrivateUsage]
 
@@ -145,6 +156,54 @@ def test_cognito_verifier_returns_groups_and_normalized_email(
 
     assert principal.email == "person@blend360.com"
     assert principal.is_admin
+
+
+def test_cognito_verifier_requires_configured_identity_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier(
+        monkeypatch,
+        {
+            "sub": "user-3",
+            "email": "person@blend360.com",
+            "email_verified": True,
+            "token_use": "id",
+            "cognito:username": "Microsoft_local-password-user",
+        },
+        required_identity_provider="Microsoft",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        verifier.verify("valid-token")
+
+    assert error.value.status_code == 403
+    assert error.value.detail == "Sign-in requires Microsoft SSO"
+
+
+def test_cognito_verifier_accepts_configured_identity_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier(
+        monkeypatch,
+        {
+            "sub": "user-4",
+            "email": "Person@Blend360.com",
+            "email_verified": "true",
+            "token_use": "id",
+            "identities": [
+                {
+                    "providerName": "Microsoft",
+                    "providerType": "OIDC",
+                    "userId": "entra-subject",
+                }
+            ],
+        },
+        required_identity_provider="Microsoft",
+    )
+
+    principal = verifier.verify("valid-token")
+
+    assert principal.email == "person@blend360.com"
 
 
 def test_configured_admin_email_repairs_a_stale_group_claim() -> None:

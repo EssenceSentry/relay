@@ -152,7 +152,6 @@ fi
 echo
 echo "Deployment complete. Next steps:"
 echo "  OPENAI_API_KEY=... ./scripts/configure_openai.sh"
-echo "  PASSWORD='...' uv run python scripts/create_user.py you@blend360.com --admin"
 echo "  uv run python scripts/configure_sso.py microsoft --tenant-id ... --client-id ..."
 if [[ -n "${EMAIL_DOMAIN:-}" ]]; then
   echo "  python scripts/email_setup_status.py"

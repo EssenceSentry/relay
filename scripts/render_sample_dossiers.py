@@ -1,0 +1,120 @@
+"""Render the five synthetic dossier fixtures for visual review."""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+from functools import partial
+from pathlib import Path
+from typing import Final
+
+from knowledge_core.dossier_rendering import (
+    DossierCompilationError,
+    PdfCompiler,
+    render_dossier_files,
+)
+
+_ROOT: Final = Path(__file__).resolve().parents[1]
+
+
+_SAMPLES: Final = (
+    "synthetic-retail.md",
+    "synthetic-garden.md",
+    "synthetic-library.md",
+    "synthetic-observatory.md",
+    "synthetic-workshop.md",
+)
+
+
+def compile_with_tectonic(
+    tectonic: Path,
+    latex_path: Path,
+) -> Path:
+    pdf_path = latex_path.with_suffix(".pdf")
+    completed = subprocess.run(
+        [
+            str(tectonic),
+            "-X",
+            "compile",
+            "--outdir",
+            str(latex_path.parent),
+            "--outfmt",
+            "pdf",
+            "--print",
+            "--untrusted",
+            latex_path.name,
+        ],
+        cwd=latex_path.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0 or not pdf_path.is_file():
+        combined_output = "\n".join(
+            part for part in (completed.stdout, completed.stderr) if part
+        )
+        tail = "\n".join(combined_output.splitlines()[-80:])
+        raise DossierCompilationError(
+            f"Tectonic failed for {latex_path.name}:\n{tail}"
+        )
+    return pdf_path
+
+
+def render_samples(
+    *,
+    output_directory: Path,
+    tectonic: Path | None,
+) -> list[Path]:
+    fixtures = _ROOT / "tests" / "fixtures" / "dossiers"
+    rendered_directories: list[Path] = []
+    for sample in _SAMPLES:
+        fixture = fixtures / sample
+        if not fixture.is_file():
+            raise FileNotFoundError(f"Missing dossier fixture: {fixture}")
+        destination = output_directory / fixture.stem
+        compiler: PdfCompiler | None = (
+            partial(compile_with_tectonic, tectonic)
+            if tectonic is not None
+            else None
+        )
+        render_dossier_files(
+            fixture.read_text(encoding="utf-8"),
+            destination,
+            filename_stem=fixture.stem,
+            pdf_compiler=compiler,
+        )
+        rendered_directories.append(destination)
+    return rendered_directories
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=_ROOT / "output" / "dossiers",
+    )
+    parser.add_argument(
+        "--tectonic",
+        type=Path,
+        help=(
+            "Optional Tectonic binary for local previews. When omitted, "
+            "the production XeLaTeX path is used."
+        ),
+    )
+    args = parser.parse_args()
+    directories = render_samples(
+        output_directory=args.output.expanduser().resolve(),
+        tectonic=(
+            args.tectonic.expanduser().resolve()
+            if args.tectonic is not None
+            else None
+        ),
+    )
+    for directory in directories:
+        print(directory)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

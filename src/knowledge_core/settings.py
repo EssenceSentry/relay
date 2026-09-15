@@ -133,6 +133,7 @@ class ApiSettings(CommonSettings):
     user_pool_id: str
     user_pool_client_id: str
     allowed_login_email_domains: frozenset[str]
+    required_identity_provider: str | None
     initial_admin_emails: frozenset[str]
     mcp_auth_enabled: bool
     mcp_cognito_client_id: str
@@ -156,6 +157,9 @@ class ApiSettings(CommonSettings):
             allowed_login_email_domains=env_email_domains(
                 "ALLOWED_LOGIN_EMAIL_DOMAINS",
                 "blend360.com",
+            ),
+            required_identity_provider=(
+                os.environ.get("REQUIRED_IDENTITY_PROVIDER", "").strip() or None
             ),
             initial_admin_emails=frozenset(
                 email.strip().casefold()

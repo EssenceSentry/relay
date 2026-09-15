@@ -54,6 +54,10 @@ def test_frontend_splits_connection_and_contextual_upload_pages() -> None:
     assert 'xhr.open("POST", session.upload_url)' in script
     assert "session.upload_required" in script
     assert '"upload_project_id"' in script
+    assert (
+        'params.set("identity_provider", state.config.identity_provider)'
+        in script
+    )
 
 
 def test_legacy_answer_link_only_shows_informational_notice() -> None:

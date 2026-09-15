@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
+from typing import Any, cast
 
 BLEND_EMAIL_DOMAIN = "blend360.com"
 _BLEND_EMAIL_PATTERN = re.compile(
@@ -16,6 +18,30 @@ _DOMAIN_PATTERN = re.compile(
     r"[a-z]{2,63}"
 )
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+
+def uses_identity_provider(
+    claims: dict[str, Any],
+    provider_name: str,
+) -> bool:
+    """Inspect Cognito-managed identities, never a user-chosen username."""
+    expected = provider_name.strip().casefold()
+    identities: object = claims.get("identities")
+    if isinstance(identities, str):
+        try:
+            identities = json.loads(identities)
+        except json.JSONDecodeError:
+            identities = None
+    if not isinstance(identities, list):
+        return False
+    for raw_identity in cast(list[object], identities):
+        if not isinstance(raw_identity, dict):
+            continue
+        identity = cast(dict[str, object], raw_identity)
+        actual = str(identity.get("providerName") or "").casefold()
+        if actual == expected:
+            return True
+    return False
 
 
 def normalize_email(value: str) -> str:
