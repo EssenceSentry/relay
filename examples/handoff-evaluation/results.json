@@ -1,0 +1,71 @@
+[
+  {
+    "question": "How many arrival records per day does the plan target?",
+    "top_sources": [
+      "project-brief.md",
+      "project-brief.md",
+      "steering-notes.md"
+    ],
+    "route": "cite",
+    "source": "project-brief.md",
+    "value": "36",
+    "passed": true
+  },
+  {
+    "question": "Where do rows with missing fields go?",
+    "top_sources": [
+      "architecture.md",
+      "architecture.md",
+      "architecture.md"
+    ],
+    "route": "cite",
+    "source": "architecture.md",
+    "value": "a review queue",
+    "passed": true
+  },
+  {
+    "question": "Can the planning tools order supplies?",
+    "top_sources": [
+      "project-brief.md",
+      "project-brief.md",
+      "architecture.md"
+    ],
+    "route": "cite",
+    "source": "project-brief.md",
+    "value": "cannot contact vessels, order supplies, or control equipment",
+    "passed": true
+  },
+  {
+    "question": "Who owns Arrival Forecast?",
+    "top_sources": [
+      "steering-notes.md",
+      "project-brief.md",
+      "project-brief.md"
+    ],
+    "route": "ask",
+    "follow_up": "Who owns Arrival Forecast?",
+    "passed": true
+  },
+  {
+    "question": "Who is the Supply Alert subject-matter expert?",
+    "top_sources": [
+      "steering-notes.md",
+      "project-brief.md",
+      "project-brief.md"
+    ],
+    "route": "ask",
+    "follow_up": "Who is the Supply Alert subject-matter expert?",
+    "passed": true
+  },
+  {
+    "question": "What planning-cycle time was measured after deployment?",
+    "top_sources": [
+      "project-brief.md",
+      "steering-notes.md",
+      "architecture.md"
+    ],
+    "route": "ask",
+    "follow_up": "What planning-cycle time was measured after deployment?",
+    "passed": true
+  }
+]

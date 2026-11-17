@@ -1,0 +1,51 @@
+{
+  "daily_records": {
+    "terms": [
+      "arrival",
+      "targets",
+      "records"
+    ],
+    "expression": "Process ([0-9]+) generated arrival records per day"
+  },
+  "invalid_rows": {
+    "terms": [
+      "validation",
+      "fields",
+      "invalid"
+    ],
+    "expression": "Schema check sends invalid rows to (a review queue)"
+  },
+  "supplies": {
+    "terms": [
+      "scope",
+      "propose",
+      "supplies"
+    ],
+    "expression": "They propose actions but (cannot contact vessels, order supplies, or control equipment)"
+  },
+  "tool_owner": {
+    "terms": [
+      "{tool}",
+      "ownership",
+      "owner"
+    ],
+    "expression": "\\| {tool} \\| ([^|]+?) \\|"
+  },
+  "tool_expert": {
+    "terms": [
+      "{tool}",
+      "expert",
+      "ownership"
+    ],
+    "expression": "\\| {tool} \\| [^|]+? \\| ([^|]+?) \\|"
+  },
+  "realized_time": {
+    "terms": [
+      "time",
+      "realized",
+      "measured",
+      "planning"
+    ],
+    "expression": "Measured cycle time was ([0-9]+ minutes)"
+  }
+}

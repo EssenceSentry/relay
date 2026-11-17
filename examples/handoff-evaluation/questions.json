@@ -1,0 +1,52 @@
+[
+  {
+    "question": "How many arrival records per day does the plan target?",
+    "expected": {
+      "route": "cite",
+      "source": "project-brief.md",
+      "value": "36"
+    },
+    "field": "daily_records"
+  },
+  {
+    "question": "Where do rows with missing fields go?",
+    "expected": {
+      "route": "cite",
+      "source": "architecture.md",
+      "value": "a review queue"
+    },
+    "field": "invalid_rows"
+  },
+  {
+    "question": "Can the planning tools order supplies?",
+    "expected": {
+      "route": "cite",
+      "source": "project-brief.md",
+      "value": "cannot contact vessels, order supplies, or control equipment"
+    },
+    "field": "supplies"
+  },
+  {
+    "question": "Who owns Arrival Forecast?",
+    "expected": {
+      "route": "ask"
+    },
+    "field": "tool_owner",
+    "tool": "Arrival Forecast"
+  },
+  {
+    "question": "Who is the Supply Alert subject-matter expert?",
+    "expected": {
+      "route": "ask"
+    },
+    "field": "tool_expert",
+    "tool": "Supply Alert"
+  },
+  {
+    "question": "What planning-cycle time was measured after deployment?",
+    "expected": {
+      "route": "ask"
+    },
+    "field": "realized_time"
+  }
+]

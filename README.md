@@ -6,6 +6,8 @@
 
 When a project handoff leaves a question unanswered, Relay helps a team find the source or the person who knows. An authenticated MCP client can retrieve project evidence, identify the gap, and capture the answer so the next person can find it. Relay was built for Blend360.
 
+**[Can Relay answer this handoff?](examples/handoff-evaluation/README.md)** Inspect six synthetic questions, their cited passages, and the point at which the client asks a person.
+
 ## Try Relay
 
 **[Watch one question become reusable project knowledge](https://essencesentry.shop/demo.html).** The interactive story replays a recorded workflow. You can explore the handoff without signing in, creating a project, or sending email.
