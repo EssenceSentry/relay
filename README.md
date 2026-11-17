@@ -4,20 +4,13 @@
 
 ![Relay](image_hero.png)
 
-Relay is an agent-native project knowledge system for Blend360. Codex, Claude,
-or another authenticated MCP client is the primary application surface. The web
-page is intentionally limited to MCP connection help, login, and direct-to-S3
-document upload.
-
-The local source implements API/MCP contract `1.0.0`. It is not deployed by
-normal development or test commands.
+When a project handoff leaves a question unanswered, Relay helps a team find the source or the person who knows. An authenticated MCP client can retrieve project evidence, identify the gap, and capture the answer so the next person can find it. Relay was built for Blend360.
 
 ## Try Relay
 
-[Open Relay](https://essencesentry.shop/) or
-[watch the interactive product story](https://essencesentry.shop/demo.html).
-The story replays a recorded workflow; its actions do not create projects or
-send emails. Live project access requires a Blend Microsoft account.
+**[Watch one question become reusable project knowledge](https://essencesentry.shop/demo.html).** The interactive story replays a recorded workflow. You can explore the handoff without signing in, creating a project, or sending email.
+
+**[Open the live service](https://essencesentry.shop/)** with a Blend Microsoft account. The web page handles sign-in, MCP connection help, and document uploads. Codex, Claude, or another authenticated MCP client is the main working interface. The local implementation uses API/MCP contract `1.0.0`. Normal development and test commands do not deploy it.
 
 To use the live system, add `https://essencesentry.shop/mcp/` as a Streamable
 HTTP MCP server in your agent and complete Microsoft sign-in. Ask the agent to
