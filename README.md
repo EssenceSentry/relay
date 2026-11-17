@@ -1,6 +1,7 @@
 # Relay
 
-[![Quality](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml/badge.svg)](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml)
+[![Quality](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-2563eb?logo=python&logoColor=white)](pyproject.toml)
 
 ![Relay](image_hero.png)
 
