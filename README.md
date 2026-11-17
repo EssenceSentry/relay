@@ -1,13 +1,19 @@
+![Relay — Make the answer survive the handoff.](.github/assets/banner.svg)
+
 # Relay
 
 [![Quality](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/EssenceSentry/relay/actions/workflows/quality.yml)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-2563eb?logo=python&logoColor=white)](pyproject.toml)
 
-![Relay](image_hero.png)
+**Turn a handoff question into knowledge the next person can find.** Relay helps an authenticated MCP client retrieve project evidence, identify what is missing, and capture an answer from someone who knows. It was built for Blend360.
 
-When a project handoff leaves a question unanswered, Relay helps a team find the source or the person who knows. An authenticated MCP client can retrieve project evidence, identify the gap, and capture the answer so the next person can find it. Relay was built for Blend360.
+**[Explore the recorded workflow →](https://essencesentry.shop/demo.html)** · [Inspect the handoff evaluation](examples/handoff-evaluation/README.md) · [Read the architecture](#architecture)
 
-**[Can Relay answer this handoff?](examples/handoff-evaluation/README.md)** Inspect six synthetic questions, their cited passages, and the point at which the client asks a person.
+- **Answers with a source.** Open the underlying project material before treating a search result as evidence.
+- **A place for unanswered questions.** Gaps become explicit questions and reusable answers instead of disappearing into a handoff.
+- **One application contract across interfaces.** FastAPI and MCP share the same application service, permission rules, and idempotent operation contracts.
+
+The public story replays a recorded workflow without sending email or creating projects. The evaluation contains six synthetic questions, their cited passages, and the point at which the client asks a person. The live service requires a Blend Microsoft account.
 
 ## Try Relay
 

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+<title id="title">Relay</title>
+<desc id="desc">Make the answer survive the handoff. Decorative illustration of the project’s workflow.</desc>
+<defs>
+  <linearGradient id="background" x2="1" y2="1"><stop stop-color="#111C27"/><stop offset="1" stop-color="#172A34"/></linearGradient>
+  <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#728995" opacity=".18"/></pattern>
+</defs>
+<rect width="1200" height="360" rx="16" fill="url(#background)"/>
+<rect x="768" y="25" width="406" height="310" fill="url(#grid)"/>
+<path d="M748 48V312" stroke="#354550" stroke-width="1"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<rect x="54" y="64" width="20" height="3" rx="1" fill="#F4AD88" stroke="none"/>
+<text x="86" y="70" font-size="11" fill="#BDCACD" letter-spacing="1.8">PROJECT KNOWLEDGE / MCP</text>
+<text x="52" y="160" font-size="64" fill="#EEF2ED" font-weight="700" letter-spacing="-2">Relay</text>
+<text x="55" y="211" font-size="25" fill="#CFD9DC" >Make the answer</text>
+<text x="55" y="245" font-size="25" fill="#CFD9DC" >survive the handoff.</text>
+<text x="56" y="309" font-size="10" fill="#9DB1BA" letter-spacing="1.3">RETRIEVE   /   ASK   /   CAPTURE   /   REUSE</text>
+<rect x="810" y="102" width="104" height="64" rx="5" fill="#172833" stroke="#304352"/><rect x="823" y="117" width="58" height="3" rx="1" fill="#647888" stroke="none"/><rect x="823" y="129" width="74" height="3" rx="1" fill="#647888" stroke="none"/><rect x="823" y="141" width="43" height="3" rx="1" fill="#647888" stroke="none"/><rect x="909" y="154" width="104" height="64" rx="5" fill="#172833" stroke="#304352"/><rect x="922" y="169" width="58" height="3" rx="1" fill="#F4AD88" stroke="none"/><rect x="922" y="181" width="74" height="3" rx="1" fill="#647888" stroke="none"/><rect x="922" y="193" width="43" height="3" rx="1" fill="#647888" stroke="none"/><rect x="1011" y="208" width="104" height="64" rx="5" fill="#172833" stroke="#304352"/><rect x="1024" y="223" width="58" height="3" rx="1" fill="#647888" stroke="none"/><rect x="1024" y="235" width="74" height="3" rx="1" fill="#647888" stroke="none"/><rect x="1024" y="247" width="43" height="3" rx="1" fill="#647888" stroke="none"/><path d="M832 192V246H970" fill="none" stroke="#F4AD88" stroke-width="2" stroke-dasharray="4 5"/><circle cx="978" cy="246" r="5" fill="#F4AD88" stroke="none" stroke-width="1"/><text x="811" y="294" font-size="11" fill="#647888" >EVIDENCE / QUESTION / ANSWER</text>
+</g>
+</svg>
