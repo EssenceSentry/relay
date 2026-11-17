@@ -1,7 +1,7 @@
 FROM public.ecr.aws/lambda/python:3.13
 
-COPY services/matching_lambda/requirements.txt ${LAMBDA_TASK_ROOT}/
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/matching_lambda/requirements.txt services/security-constraints.txt /tmp/
+RUN pip install --no-cache-dir -c /tmp/security-constraints.txt -r /tmp/requirements.txt
 
 COPY src/knowledge_core ${LAMBDA_TASK_ROOT}/knowledge_core
 COPY services/matching_lambda/handler.py ${LAMBDA_TASK_ROOT}/handler.py

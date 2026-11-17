@@ -1,0 +1,4 @@
+# Security floors for transitive packages used by service images.
+certifi>=2026.10.18
+pillow>=13.0.0
+urllib3>=2.8.0

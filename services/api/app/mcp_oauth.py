@@ -465,5 +465,6 @@ def build_mcp_auth_settings(settings: McpPublicSettings) -> AuthSettings:
             default_scopes=[MCP_SCOPE],
         ),
         required_scopes=[MCP_SCOPE],
+        validate_token_resource=True,
         resource_server_url=AnyHttpUrl(f"{base_url}/mcp/"),
     )

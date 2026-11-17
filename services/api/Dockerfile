@@ -13,8 +13,8 @@ RUN apt-get update \
         texlive-xetex \
     && rm -rf /var/lib/apt/lists/*
 
-COPY services/api/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY services/api/requirements.txt services/security-constraints.txt /tmp/
+RUN pip install --no-cache-dir -c /tmp/security-constraints.txt -r /tmp/requirements.txt
 
 COPY src /app/src
 COPY services/api /app/services/api

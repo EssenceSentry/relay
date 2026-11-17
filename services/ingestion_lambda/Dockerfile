@@ -1,6 +1,6 @@
 FROM python:3.12-slim-bookworm AS build
 
-COPY services/ingestion_lambda/requirements.txt /tmp/requirements.txt
+COPY services/ingestion_lambda/requirements.txt services/security-constraints.txt /tmp/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         cmake \
@@ -9,7 +9,7 @@ RUN apt-get update \
         make \
         unzip \
     && pip install --no-cache-dir --target /opt/function \
-        -r /tmp/requirements.txt \
+        -c /tmp/security-constraints.txt -r /tmp/requirements.txt \
     && rm -rf /var/lib/apt/lists/*
 
 FROM python:3.12-slim-bookworm
